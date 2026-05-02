@@ -53,10 +53,11 @@ def occupation_kw(intent: str) -> list[str]:
 def load_pool(country: str = 'korea', sample_n: int = 50000, seed: int = 42) -> pd.DataFrame:
     """HuggingFace 스트리밍으로 sample_n 행 로드.
 
-    buffer_size=100_000 셔플: 앞쪽 ~150k 행에서 균등 추출.
-    1M 전체 균등 샘플은 아니지만, Nemotron 데이터 자체가 인구통계 비례
-    생성이므로 탐색 시뮬에 충분한 대표성을 가진다.
-    전체 다운로드(비스트리밍) 대비 시작 시간이 수십 배 빠르다.
+    편향 주의: buffer_size=100_000 셔플은 데이터셋 앞쪽 ~150k 행 안에서만
+    무작위 추출한다. 1M 전체 균등 샘플이 아님. Nemotron 데이터가 인구통계
+    비례 생성이므로 탐색 시뮬에서는 허용 가능하지만, 드문 직업·지역은
+    과소대표될 수 있다. 수집 후 재셔플로 필터 단계 편향은 완화한다.
+    전체 다운로드 대비 시작 시간이 수십 배 빠르다.
     """
     try:
         from datasets import load_dataset
@@ -78,7 +79,7 @@ def load_pool(country: str = 'korea', sample_n: int = 50000, seed: int = 42) -> 
         if (i + 1) % 10000 == 0:
             print(f'  {i + 1:,} / {sample_n:,} 행 수집...', flush=True)
     print(f'  완료: {len(rows):,}행 로드됨', flush=True)
-    return pd.DataFrame(rows).reset_index(drop=True)
+    return pd.DataFrame(rows).sample(frac=1, random_state=seed).reset_index(drop=True)
 
 
 def filter_pool(

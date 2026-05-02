@@ -25,11 +25,9 @@ Each sub-agent receives a batch of 5 persona profiles and responds **in characte
 - [Claude Code](https://claude.ai/code) (any plan — uses your existing subscription, no extra API key)
 - Python 3.10+
 
-```bash
-pip install datasets pandas pyarrow
-```
+All Python dependencies are installed automatically with the package (step 1 below).
 
-First run downloads and caches the Nemotron dataset (~few GB). Subsequent runs load from cache instantly.
+First run streams ~50k persona rows from HuggingFace — no full dataset download. Takes ~15–40s depending on connection speed.
 
 ---
 
@@ -43,11 +41,9 @@ First run downloads and caches the Nemotron dataset (~few GB). Subsequent runs l
 pip install market-simulation
 ```
 
-2. Copy `SKILL.md` to your Claude Code skills directory:
+2. Install the skill into Claude Code:
 
 ```bash
-pip show market-simulation | grep Location | awk '{print $2}'
-# copy SKILL.md from that location, or download directly:
 curl -o ~/.claude/skills/market-simulation.md \
   https://raw.githubusercontent.com/lumatic2/market-simulation/master/SKILL.md
 ```
@@ -131,11 +127,11 @@ output/
 
 ```
 market-simulation/
-├── SKILL.md          ← Claude Code skill entrypoint
-├── src/
-│   ├── personas.py   ← HuggingFace loader, filter, card builder
-│   └── analyze.py    ← CSV → stats report generator
-└── output/           ← simulation results (gitignored)
+├── SKILL.md               ← Claude Code skill entrypoint
+├── market_simulation/
+│   ├── personas.py        ← HuggingFace loader, filter, card builder
+│   └── analyze.py         ← CSV → stats report generator
+└── output/                ← simulation results (gitignored)
 ```
 
 ---

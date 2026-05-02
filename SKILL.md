@@ -42,12 +42,18 @@ description: >
 ## 시작 전 의존성 확인
 
 ```python
-import importlib.util, sys
-missing = [m for m in ['datasets', 'pandas', 'pyarrow', 'market_simulation'] if not importlib.util.find_spec(m)]
-print('OK' if not missing else f'pip install {" ".join(missing).replace("market_simulation", "market-simulation")}')
+import importlib.util, subprocess, sys
+pip_map = {'datasets': 'datasets', 'pandas': 'pandas', 'pyarrow': 'pyarrow', 'market_simulation': 'market-simulation'}
+missing = [pip_map[m] for m in pip_map if not importlib.util.find_spec(m)]
+if missing:
+    print(f'패키지 설치 중: {missing}', flush=True)
+    subprocess.check_call([sys.executable, '-m', 'pip', 'install', '-q'] + missing)
+    print('설치 완료', flush=True)
+else:
+    print('OK', flush=True)
 ```
 
-누락 패키지가 있으면 출력된 `pip install ...` 명령을 실행 후 재시도.
+`sys.executable`로 Claude Code Bash 툴이 사용하는 Python에 직접 설치하므로 환경 불일치 문제가 없다.
 
 ---
 

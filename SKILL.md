@@ -1,16 +1,48 @@
 ---
 name: market-simulation
 description: >
-  Nemotron 한국 페르소나(HuggingFace 공개 데이터, 로컬 LLM·API 키 불필요)로
-  시장 반응을 시뮬레이션한다. Claude Code Agent 툴로 배치 격리 실행.
+  NVIDIA Nemotron 페르소나(HuggingFace 공개 데이터, 로컬 LLM·API 키 불필요)로
+  시장 반응을 시뮬레이션한다. 한국·미국·일본·인도·프랑스·브라질·싱가포르 지원.
+  Claude Code Agent 툴로 배치 격리 실행.
   "시장 반응", "사용자 조사", "포커스 그룹", "페르소나 시뮬", "타깃 반응",
-  "구매 의향", "가격 테스트", "한국 소비자" 등 언급 시 이 스킬을 사용하라.
+  "구매 의향", "가격 테스트", "한국 소비자", "미국 시장" 등 언급 시 이 스킬을 사용하라.
 ---
 
 # /market-simulation — AI 시장 반응 시뮬레이터
 
 **전제**: Claude Code만 있으면 동작. 로컬 LLM, 별도 API 키 불필요.  
-**데이터**: NVIDIA Nemotron-Personas-Korea (HuggingFace, CC BY 4.0, 100만 한국 페르소나)
+**데이터**: NVIDIA Nemotron-Personas (HuggingFace, CC BY 4.0) — 7개국 총 800만+ 페르소나
+
+---
+
+## ⚠️ 면책 고지 — 시뮬 시작 전 반드시 사용자에게 고지
+
+스킬 실행 첫 메시지에 다음 문구를 **항상** 포함한다:
+
+> **이 시뮬레이션은 AI가 AI 페르소나를 연기하는 구조입니다.**  
+> 결과는 실제 소비자 조사·인터뷰·설문을 대체할 수 없으며, 통계적 대표성이 없습니다.  
+> 아이디어 초기 검증·가설 수립 용도로만 사용하세요.  
+> 특히 찬성 비율은 LLM positive bias로 실제보다 높게 나오는 경향이 있습니다.
+
+---
+
+## 지원 국가 (country 파라미터)
+
+| country | 데이터셋 | 언어 | level-1 지역 | level-2 지역 |
+|---|---|---|---|---|
+| `korea` | Nemotron-Personas-Korea | 한국어 | province (시도) | district (시군구) |
+| `usa` | Nemotron-Personas-USA | 영어 | state (약어: 'CA', 'NY', 'TX'…) | city |
+| `japan` | Nemotron-Personas-Japan | 일본어 | prefecture | area |
+| `india` | Nemotron-Personas-India | 영어/힌디 | state | district |
+| `france` | Nemotron-Personas-France | 프랑스어 | departement | commune |
+| `brazil` | Nemotron-Personas-Brazil | 포르투갈어 | state | municipality |
+| `singapore` | Nemotron-Personas-Singapore | 영어 | planning_area | — |
+
+`filter_pool(province=...)` 의 province 파라미터는 각 국가의 level-1 컬럼에 자동 매핑된다.
+
+> **USA 주의**: occupation 값이 snake_case 코드(`software_developer`, `not_in_workforce` 등)로 저장됨.  
+> `not_in_workforce` 비율이 ~46%로 높으므로 직업 필터를 적용하지 않으면 풀이 희석됨.  
+> 영어 occupation 필터는 `occupation_kw('tech')`, `occupation_kw('management')` 등 사용.
 
 ---
 
@@ -73,13 +105,14 @@ import sys, os
 sys.stdout.reconfigure(encoding='utf-8')  # Windows 터미널 한글 깨짐 방지
 from market_simulation.personas import load_pool, filter_pool, occupation_kw, persona_to_card
 
+# country: 'korea' | 'usa' | 'japan' | 'india' | 'france' | 'brazil' | 'singapore'
 df = load_pool('korea', sample_n=50000)
 
 pool = filter_pool(
     df,
-    province='서울',                              # 없으면 제거
+    province='서울',                              # 국가별 level-1 지역 (없으면 제거)
     age_range=(25, 45),                           # 없으면 제거
-    occupation_keywords=occupation_kw('직장인'),  # 없으면 제거
+    occupation_keywords=occupation_kw('직장인'),  # 없으면 제거 (영어권: occupation_kw('tech') 등)
 )
 
 N = 20          # 사용자 요청 인원
@@ -190,7 +223,7 @@ import sys, os
 sys.stdout.reconfigure(encoding='utf-8')
 from market_simulation.personas import load_pool, filter_pool, print_card
 
-df = load_pool('korea', sample_n=10000)
+df = load_pool('korea', sample_n=10000)  # country 파라미터로 국가 변경 가능
 pool = filter_pool(df, province='서울')  # 사용자 조건으로 교체
 
 cards = pool.sample(min(3, len(pool)), random_state=42)

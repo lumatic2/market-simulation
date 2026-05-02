@@ -2,31 +2,53 @@
 Nemotron-Personas 로드 / 필터 / 카드 빌더.
 
 HuggingFace datasets 라이브러리로 스트리밍 로드 — 로컬 설치 불필요.
-지원 국가: korea, japan
 
-컬럼 스키마 차이:
-  Korea: province, district, family_type, housing_type
-  Japan: prefecture, area, region, marital_status (province/district 없음)
-filter_pool(province=...) 는 두 스키마 모두 처리.
+지원 국가 (모두 CC BY 4.0):
+    korea, usa, japan, india, france, brazil, singapore
+
+지역 컬럼 스키마 (국가별):
+    korea     : province(시도)   + district(시군구)
+    usa       : state            + city
+    japan     : prefecture(도부현) + area(동/서)
+    india     : state            + district
+    france    : departement      + commune
+    brazil    : state            + municipality
+    singapore : planning_area    (level2 없음)
+
+filter_pool(province=...) 의 province 파라미터는 level-1 지역 컬럼에
+자동 매핑되며, district 파라미터는 level-2 컬럼에 매핑됩니다.
 
 사용 예:
-    from src.personas import load_pool, filter_pool, persona_to_card, occupation_kw
-    df = load_pool('korea', sample_n=50000)
-    pool = filter_pool(df, province='서울', age_range=(25, 39),
-                       occupation_keywords=occupation_kw('IT'))
-    sample = pool.sample(20, random_state=42)
-    cards = [persona_to_card(sample.iloc[i]) for i in range(len(sample))]
+    from market_simulation.personas import load_pool, filter_pool, persona_to_card
+    df = load_pool('usa', sample_n=50000)
+    pool = filter_pool(df, province='California', age_range=(25, 39))
+    cards = [persona_to_card(pool.iloc[i], i) for i in range(20)]
 """
 
 from __future__ import annotations
 import pandas as pd
 
 DATASET_IDS = {
-    'korea': 'nvidia/Nemotron-Personas-Korea',
-    'japan': 'nvidia/Nemotron-Personas-Japan',
+    'korea':     'nvidia/Nemotron-Personas-Korea',
+    'usa':       'nvidia/Nemotron-Personas-USA',
+    'japan':     'nvidia/Nemotron-Personas-Japan',
+    'india':     'nvidia/Nemotron-Personas-India',
+    'france':    'nvidia/Nemotron-Personas-France',
+    'brazil':    'nvidia/Nemotron-Personas-Brazil',
+    'singapore': 'nvidia/Nemotron-Personas-Singapore',
 }
 
+# (level-1 컬럼, level-2 컬럼) 우선순위 순서로 탐색
+_GEO_PRIORITY = [
+    ('province',     'district'),      # Korea
+    ('state',        'city'),          # USA, India, Brazil
+    ('prefecture',   'area'),          # Japan
+    ('departement',  'commune'),       # France
+    ('planning_area', None),           # Singapore
+]
+
 OCCUPATION_KEYWORDS: dict[str, list[str]] = {
+    # ── 한국 직업 분류 ──────────────────────────────────────────────
     '직장인':    ['사무', '관리', '전문', '기술', '연구', '개발', '기획', '영업', '회계', '마케팅', '디자인', '교사', '분석', '컨설턴트'],
     '자영업자':  ['자영', '대표', '사장', '경영주', '음식점', '상점', '소매'],
     '주부':      ['전업주부', '가사'],
@@ -42,6 +64,15 @@ OCCUPATION_KEYWORDS: dict[str, list[str]] = {
     '농림수산':  ['농업', '어업', '임업', '축산'],
     '예술·문화': ['작가', '음악', '연주', '배우', '감독', '미술', '출판', '편집'],
     '금융':      ['금융', '은행', '보험', '증권', '회계'],
+    # ── 영어권 직업 분류 (USA, Singapore 등) ────────────────────────
+    'tech':      ['engineer', 'developer', 'programmer', 'software', 'data', 'system', 'IT', 'tech'],
+    'finance':   ['finance', 'banking', 'accountant', 'analyst', 'investment', 'insurance'],
+    'healthcare':['doctor', 'nurse', 'physician', 'therapist', 'pharmacist', 'medical', 'health'],
+    'education': ['teacher', 'professor', 'instructor', 'tutor', 'educator', 'lecturer'],
+    'retail':    ['retail', 'sales', 'cashier', 'store', 'shop'],
+    'management':['manager', 'director', 'executive', 'CEO', 'COO', 'VP', 'supervisor'],
+    'creative':  ['designer', 'artist', 'writer', 'photographer', 'creative'],
+    'student':   ['student', 'undergraduate', 'graduate'],
 }
 
 
@@ -50,14 +81,30 @@ def occupation_kw(intent: str) -> list[str]:
     return OCCUPATION_KEYWORDS.get(intent, [])
 
 
+def _geo_cols(df: pd.DataFrame) -> tuple[str | None, str | None]:
+    """데이터프레임 컬럼에서 (level-1, level-2) 지역 컬럼 이름을 탐지."""
+    for l1, l2 in _GEO_PRIORITY:
+        if l1 in df.columns:
+            return l1, (l2 if l2 and l2 in df.columns else None)
+    return None, None
+
+
+def _geo_from_row(p: pd.Series) -> tuple[str | None, str | None]:
+    """Series 인덱스에서 (level-1, level-2) 지역 컬럼 이름을 탐지."""
+    for l1, l2 in _GEO_PRIORITY:
+        if l1 in p.index:
+            return l1, (l2 if l2 and l2 in p.index else None)
+    return None, None
+
+
 def load_pool(country: str = 'korea', sample_n: int = 50000, seed: int = 42) -> pd.DataFrame:
     """HuggingFace 스트리밍으로 sample_n 행 로드.
 
     편향 주의: buffer_size=100_000 셔플은 데이터셋 앞쪽 ~150k 행 안에서만
-    무작위 추출한다. 1M 전체 균등 샘플이 아님. Nemotron 데이터가 인구통계
-    비례 생성이므로 탐색 시뮬에서는 허용 가능하지만, 드문 직업·지역은
-    과소대표될 수 있다. 수집 후 재셔플로 필터 단계 편향은 완화한다.
-    전체 다운로드 대비 시작 시간이 수십 배 빠르다.
+    무작위 추출한다. 전체 균등 샘플이 아님. 탐색 시뮬에서는 허용 가능하지만
+    드문 직업·지역은 과소대표될 수 있다. 수집 후 재셔플로 완화.
+
+    India: 3개 언어 split(EN/Hindi-Dev/Hindi-Lat) 중 EN(train) 기본 로드.
     """
     try:
         from datasets import load_dataset
@@ -90,52 +137,64 @@ def filter_pool(
     sex: str | None = None,
     occupation_keywords: list[str] | None = None,
 ) -> pd.DataFrame:
-    """조건 AND로 누적 필터. 결과가 요청 N의 3배 미만이면 호출자가 조건 완화.
+    """조건 AND로 누적 필터.
 
-    Korea/Japan 스키마 자동 감지:
-      province 파라미터 → 'province' 컬럼(Korea) 또는 'prefecture' 컬럼(Japan)
-      district 파라미터 → 'district' 컬럼(Korea) 또는 'area' 컬럼(Japan)
+    province 파라미터 → 국가별 level-1 지역 컬럼에 자동 매핑
+    district 파라미터 → 국가별 level-2 지역 컬럼에 자동 매핑
     """
+    l1_col, l2_col = _geo_cols(df)
     m = pd.Series(True, index=df.index)
-    if province is not None:
-        col = 'province' if 'province' in df.columns else 'prefecture'
-        m &= df[col].isin([province] if isinstance(province, str) else province)
-    if district is not None:
-        col = 'district' if 'district' in df.columns else 'area'
-        m &= df[col].isin([district] if isinstance(district, str) else district)
+
+    if province is not None and l1_col:
+        m &= df[l1_col].isin([province] if isinstance(province, str) else province)
+    if district is not None and l2_col:
+        m &= df[l2_col].isin([district] if isinstance(district, str) else district)
     if age_range is not None:
         m &= df['age'].between(*age_range)
     if sex is not None:
         m &= df['sex'] == sex
     if occupation_keywords:
         pat = '|'.join(occupation_keywords)
-        m &= df['occupation'].str.contains(pat, na=False)
+        m &= df['occupation'].str.contains(pat, na=False, case=False)
     return df[m]
 
 
-def _location(p) -> str:
-    """Korea/Japan 스키마 모두에서 지역 문자열 반환."""
-    if 'province' in p.index:
-        return f"{p['province']} {p['district']}"
-    return f"{p.get('prefecture', '')} {p.get('area', '')}".strip()
+def _location(p: pd.Series) -> str:
+    """Korea/USA/Japan/India/France/Brazil/Singapore 스키마 모두에서 지역 문자열 반환."""
+    l1_col, l2_col = _geo_from_row(p)
+    if l1_col is None:
+        return ''
+    loc = str(p[l1_col])
+    if l2_col:
+        loc = f"{loc} {p[l2_col]}"
+    return loc.strip()
 
 
-def persona_to_card(p, idx: int = 0) -> str:
+def persona_to_card(p: pd.Series, idx: int = 0) -> str:
     """페르소나 1행 → Agent 프롬프트용 구조화 텍스트.
 
     출력 번호(idx+1)는 에이전트 응답 파싱 시 '## 응답 N' 과 1:1 대응한다.
-    Korea/Japan 스키마 모두 지원.
+    모든 지원 국가 스키마 호환.
     """
+    extras = []
+    if 'family_type' in p.index and pd.notna(p.get('family_type')):
+        extras.append(f"가구: {p['family_type']}")
+    if 'marital_status' in p.index and pd.notna(p.get('marital_status')):
+        extras.append(f"혼인: {p['marital_status']}")
+    extra_line = f"\n- 기타: {' / '.join(extras)}" if extras else ''
+
     return (
         f"## 인물 {idx+1}\n"
         f"- 기본: {p['sex']}, {p['age']}세, {_location(p)}, {p['occupation']}, {p['education_level']}\n"
         f"- 배경: {p['persona']}\n"
         f"- 직업: {p['professional_persona']}\n"
         f"- 취미: {p['hobbies_and_interests']}"
+        f"{extra_line}"
     )
 
 
-def print_card(p) -> None:
+def print_card(p: pd.Series) -> None:
+    l1_col, l2_col = _geo_from_row(p)
     loc = _location(p)
     print(f"━━━ {p['sex']} · {p['age']}세 · {loc} ━━━")
     print(f"  직업  : {p['occupation']}")

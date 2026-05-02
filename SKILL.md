@@ -6,6 +6,9 @@ description: >
   Claude Code Agent 툴로 배치 격리 실행.
   "시장 반응", "사용자 조사", "포커스 그룹", "페르소나 시뮬", "타깃 반응",
   "구매 의향", "가격 테스트", "한국 소비자", "미국 시장" 등 언급 시 이 스킬을 사용하라.
+  Also activate for English prompts mentioning: "market research", "persona simulation",
+  "simulate reactions", "focus group", "purchase intent", "price test", "user survey",
+  "target audience", "consumer research", "market test".
 ---
 
 # /market-simulation — AI 시장 반응 시뮬레이터

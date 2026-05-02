@@ -52,23 +52,57 @@ REPORT_TEMPLATE = """# {title}
 """
 
 
+REQUIRED_COLS = {'age', 'sex', 'occupation', 'province', 'district', 'answer'}
+_MD_ESCAPE = str.maketrans({'|': '/', '\n': ' ', '\r': ' '})
+
+
+def _md_safe(s: str, max_len: int = 0) -> str:
+    cleaned = str(s).translate(_MD_ESCAPE)
+    return cleaned[:max_len] if max_len else cleaned
+
+
 def write_report(csv_path: str, topic: str = '', question: str = '') -> str:
     """CSV 옆에 .report.md 통계 리포트를 생성하고 그 경로를 반환."""
-    df = pd.read_csv(csv_path, encoding='utf-8-sig')
+    import os
+    from pandas.errors import EmptyDataError
+
+    os.makedirs(os.path.dirname(csv_path) or '.', exist_ok=True)
+
+    try:
+        df = pd.read_csv(csv_path, encoding='utf-8-sig')
+    except EmptyDataError:
+        md_path = csv_path.replace('.csv', '.report.md')
+        with open(md_path, 'w', encoding='utf-8') as f:
+            f.write(f'# {topic or "시뮬 결과"}\n\n빈 CSV — 시뮬레이션 결과가 없습니다.\n')
+        return md_path
+
+    missing = REQUIRED_COLS - set(df.columns)
+    if missing:
+        md_path = csv_path.replace('.csv', '.report.md')
+        with open(md_path, 'w', encoding='utf-8') as f:
+            f.write(f'# {topic or "시뮬 결과"}\n\n필수 컬럼 누락: {missing}\n')
+        return md_path
+
     n = len(df)
+    if n == 0:
+        md_path = csv_path.replace('.csv', '.report.md')
+        with open(md_path, 'w', encoding='utf-8') as f:
+            f.write(f'# {topic or "시뮬 결과"}\n\n행 없음 — 시뮬레이션 결과가 없습니다.\n')
+        return md_path
+
     df['answer'] = df['answer'].fillna('')
 
     is_short = df['answer'].str.len() < SHORT_THRESHOLD
     ok_df = df[~is_short]
     n_ok = len(ok_df)
     n_short = n - n_ok
-    n_batches = -(-n // 5)  # ceil
+    n_batches = -(-n // 5)
 
     mean_len = df['answer'].str.len().mean()
     med_len  = df['answer'].str.len().median()
-    rate     = n_ok / n if n else 0
+    rate     = n_ok / n
 
-    province_top = df['province'].mode().iat[0] if n else ''
+    province_top = df['province'].mode().iat[0]
     occ_top = ', '.join(df['occupation'].value_counts().head(3).index.tolist())
 
     demo_lines = ['| 항목 | 분포 |', '|---|---|']
@@ -79,23 +113,22 @@ def write_report(csv_path: str, topic: str = '', question: str = '') -> str:
                        ('family_type', '가구'), ('education_level', '학력')]:
         if col in df.columns:
             vals = df[col].value_counts().head(5).to_dict()
-            demo_lines.append(f"| {label} | " + ', '.join(f"{k}({v})" for k, v in vals.items()) + ' |')
+            demo_lines.append(f"| {label} | " + ', '.join(f"{_md_safe(k)}({v})" for k, v in vals.items()) + ' |')
     demo_table = '\n'.join(demo_lines)
 
     quote_blocks = []
     for _, r in ok_df.iterrows():
         quote_blocks.append(
-            f"### [{r['age']}세 {r['sex']} · {r['occupation']} · {r['district']}]\n"
-            f"> {r['answer']}\n"
+            f"### [{r['age']}세 {_md_safe(r['sex'])} · {_md_safe(r['occupation'])} · {_md_safe(r['district'])}]\n"
+            f"> {_md_safe(r['answer'])}\n"
         )
     quotes = '\n'.join(quote_blocks) if quote_blocks else '_정상 응답 없음._'
 
-    if n - n_ok > 0:
+    if n_short > 0:
         short_rows = df[is_short]
         short_lines = ['| 나이 | 직업 | 응답(앞 40자) |', '|---|---|---|']
         for _, r in short_rows.iterrows():
-            ans = r['answer'][:40].replace('|', '/').replace('\n', ' ')
-            short_lines.append(f"| {r['age']} | {r['occupation']} | {ans} |")
+            short_lines.append(f"| {r['age']} | {_md_safe(r['occupation'])} | {_md_safe(r['answer'], 40)} |")
         short_table = '\n'.join(short_lines)
     else:
         short_table = '_없음._'

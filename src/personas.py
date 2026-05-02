@@ -46,7 +46,14 @@ def occupation_kw(intent: str) -> list[str]:
 
 
 def load_pool(country: str = 'korea', sample_n: int = 50000, seed: int = 42) -> pd.DataFrame:
-    """HuggingFace 스트리밍으로 sample_n 행 로드. 첫 실행 시 캐시 저장."""
+    """HuggingFace에서 균등 랜덤 샘플 로드.
+
+    첫 실행: 전체 데이터셋 다운로드 후 캐시 (수 분 소요, ~수 GB).
+    이후 실행: 캐시에서 즉시 로드.
+
+    streaming=True의 buffer shuffle은 sliding-window라 편향이 남으므로
+    비스트리밍 + .shuffle()로 인덱스 수준 균등 샘플링을 사용한다.
+    """
     try:
         from datasets import load_dataset
     except ImportError:
@@ -56,18 +63,15 @@ def load_pool(country: str = 'korea', sample_n: int = 50000, seed: int = 42) -> 
     if not ds_id:
         raise ValueError(f'country는 {list(DATASET_IDS)} 중 하나여야 합니다.')
 
-    ds = load_dataset(ds_id, split='train', streaming=True)
-    rows = []
-    for i, row in enumerate(ds):
-        if i >= sample_n:
-            break
-        rows.append(row)
-    return pd.DataFrame(rows).sample(frac=1, random_state=seed).reset_index(drop=True)
+    ds = load_dataset(ds_id, split='train')  # 캐시 후 재사용
+    ds = ds.shuffle(seed=seed)
+    return ds.select(range(min(sample_n, len(ds)))).to_pandas()
 
 
 def filter_pool(
     df: pd.DataFrame,
     province: str | list[str] | None = None,
+    district: str | list[str] | None = None,
     age_range: tuple[int, int] | None = None,
     sex: str | None = None,
     occupation_keywords: list[str] | None = None,
@@ -76,6 +80,8 @@ def filter_pool(
     m = pd.Series(True, index=df.index)
     if province is not None:
         m &= df['province'].isin([province] if isinstance(province, str) else province)
+    if district is not None:
+        m &= df['district'].isin([district] if isinstance(district, str) else district)
     if age_range is not None:
         m &= df['age'].between(*age_range)
     if sex is not None:
@@ -87,13 +93,16 @@ def filter_pool(
 
 
 def persona_to_card(p, idx: int = 0) -> str:
-    """페르소나 1행 → Agent 프롬프트용 구조화 텍스트."""
+    """페르소나 1행 → Agent 프롬프트용 구조화 텍스트.
+
+    출력 번호(idx+1)는 에이전트 응답 파싱 시 '## 응답 N' 과 1:1 대응한다.
+    """
     return (
-        f"[페르소나_{idx+1}] "
-        f"{p['sex']} · {p['age']}세 · {p['province']} {p['district']} · {p['occupation']} · {p['education_level']}\n"
-        f"  배경: {p['persona']}\n"
-        f"  직업: {p['professional_persona']}\n"
-        f"  취미: {p['hobbies_and_interests']}"
+        f"## 인물 {idx+1}\n"
+        f"- 기본: {p['sex']}, {p['age']}세, {p['province']} {p['district']}, {p['occupation']}, {p['education_level']}\n"
+        f"- 배경: {p['persona']}\n"
+        f"- 직업: {p['professional_persona']}\n"
+        f"- 취미: {p['hobbies_and_interests']}"
     )
 
 

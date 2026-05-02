@@ -42,28 +42,12 @@ description: >
 ## 시작 전 의존성 확인
 
 ```python
-import importlib.util, sys, os
-
-# 1. Python 패키지 확인
-missing = [m for m in ['datasets', 'pandas', 'pyarrow'] if not importlib.util.find_spec(m)]
-if missing:
-    print(f'pip install {" ".join(missing)}')
-else:
-    print('패키지 OK')
-
-# 2. src/personas.py 접근 가능 여부 확인
-_src = os.path.join(os.path.abspath('.'), 'src', 'personas.py')
-if not os.path.exists(_src):
-    print('⚠ 오류: src/personas.py를 찾을 수 없습니다.')
-    print('이 스킬은 market-simulation 레포 루트에서 실행해야 합니다:')
-    print('  git clone https://github.com/lumatic2/market-simulation ~/projects/market-simulation')
-    print('  cd ~/projects/market-simulation && claude')
-else:
-    print('경로 OK')
+import importlib.util, sys
+missing = [m for m in ['datasets', 'pandas', 'pyarrow', 'market_simulation'] if not importlib.util.find_spec(m)]
+print('OK' if not missing else f'pip install {" ".join(missing).replace("market_simulation", "market-simulation")}')
 ```
 
-패키지 누락이면 `pip install datasets pandas pyarrow` 안내 후 중단.  
-`src/personas.py` 없음 오류가 나면 레포 루트로 이동 안내 후 중단.
+누락 패키지가 있으면 출력된 `pip install ...` 명령을 실행 후 재시도.
 
 ---
 
@@ -81,13 +65,7 @@ else:
 ```python
 import sys, os
 sys.stdout.reconfigure(encoding='utf-8')  # Windows 터미널 한글 깨짐 방지
-
-_repo = os.path.abspath('.')
-if not os.path.exists(os.path.join(_repo, 'src', 'personas.py')):
-    print('오류: market-simulation 레포 루트에서 실행하세요 (cd ~/projects/market-simulation)')
-    sys.exit(1)
-sys.path.insert(0, _repo)
-from src.personas import load_pool, filter_pool, occupation_kw, persona_to_card
+from market_simulation.personas import load_pool, filter_pool, occupation_kw, persona_to_card
 
 df = load_pool('korea', sample_n=50000)
 
@@ -181,7 +159,7 @@ id, age, sex, occupation, province, district, answer
 ### 5단계 — 리포트 생성 및 요약 (Python)
 
 ```python
-from src.analyze import write_report
+from market_simulation.analyze import write_report
 import datetime
 
 date_str = datetime.date.today().isoformat()
@@ -204,13 +182,7 @@ print(f'report: {report_path}')
 ```python
 import sys, os
 sys.stdout.reconfigure(encoding='utf-8')
-
-_repo = os.path.abspath('.')
-if not os.path.exists(os.path.join(_repo, 'src', 'personas.py')):
-    print('오류: market-simulation 레포 루트에서 실행하세요 (cd ~/projects/market-simulation)')
-    sys.exit(1)
-sys.path.insert(0, _repo)
-from src.personas import load_pool, filter_pool, print_card
+from market_simulation.personas import load_pool, filter_pool, print_card
 
 df = load_pool('korea', sample_n=10000)
 pool = filter_pool(df, province='서울')  # 사용자 조건으로 교체

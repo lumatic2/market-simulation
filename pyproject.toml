@@ -1,8 +1,19 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
 [project]
 name = "market-simulation"
 version = "0.1.0"
-description = "AI market simulation using Nemotron Korean personas via Claude Code Agents"
+description = "AI market research simulation using NVIDIA Nemotron personas and Claude Code Agents"
+readme = "README.md"
+license = "MIT"
 requires-python = ">=3.10"
+keywords = ["market research", "simulation", "personas", "claude", "ai"]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Operating System :: OS Independent",
+]
 dependencies = [
     "datasets>=2.14.0",
     "pandas>=2.0.0",
@@ -10,4 +21,12 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-dev = ["pytest", "ruff"]
+dev = ["pytest", "ruff", "build", "twine"]
+
+[project.urls]
+Homepage = "https://github.com/lumatic2/market-simulation"
+Repository = "https://github.com/lumatic2/market-simulation"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["market_simulation*"]

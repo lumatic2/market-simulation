@@ -594,6 +594,82 @@ def _auto_insights(df: pd.DataFrame) -> list[str]:
     return insights
 
 
+def _select_notable_quotes(df: pd.DataFrame, geo_col, loc2_col) -> list[dict]:
+    """주목할 응답 최대 3개 자동 선별 (긍정 대표 · 저항 대표 · 복합 반응)."""
+    _COND = re.compile(r'다면|한다면|이라면|는데요|지만|긴 하|다고는|하지만|망설|아직|좀 더|고민|걱정|모르겠')
+
+    def _row_to_quote(row, label, color):
+        g1 = str(row[geo_col]) if geo_col and geo_col in row.index else ''
+        g2 = f' {str(row[loc2_col])}' if loc2_col and loc2_col in row.index else ''
+        return {
+            'label': label, 'color': color,
+            'profile': f"{row['age']}세 {row['sex']} · {row['occupation']}" + (f' · {g1}{g2}' if g1 else ''),
+            'answer': str(row['answer']) if row.get('answer') else '',
+        }
+
+    results, used = [], set()
+
+    # 1. 긍정 대표 — 긍정 중 가장 긴 응답
+    pos_df = df[df['sentiment'] == '긍정'] if 'sentiment' in df.columns else pd.DataFrame()
+    if len(pos_df) > 0:
+        idx = pos_df['answer'].str.len().idxmax()
+        results.append(_row_to_quote(df.loc[idx], '수용 대표 응답', '#3fb950'))
+        used.add(idx)
+
+    # 2. 저항 대표 — 부정 중 가장 긴 응답
+    neg_df = df[(df['sentiment'] == '부정') & (~df.index.isin(used))] if 'sentiment' in df.columns else pd.DataFrame()
+    if len(neg_df) > 0:
+        idx = neg_df['answer'].str.len().idxmax()
+        results.append(_row_to_quote(df.loc[idx], '저항 대표 응답', '#f85149'))
+        used.add(idx)
+
+    # 3. 복합 반응 — 조건부 표현이 가장 많은 응답 (중립/긍정 우선)
+    remaining = df[~df.index.isin(used)].copy()
+    if len(remaining) > 0:
+        remaining['_cs'] = remaining['answer'].fillna('').apply(lambda t: len(_COND.findall(t)))
+        idx = remaining['_cs'].idxmax()
+        if remaining.loc[idx, '_cs'] > 0:
+            results.append(_row_to_quote(df.loc[idx], '복합 반응', '#d29922'))
+
+    return results
+
+
+def _headline(df: pd.DataFrame, n_pos: int, n_neg: int, n_neu: int, n: int) -> str:
+    """가장 중요한 발견 1줄 요약 문장 생성."""
+    dom_label, dom_count = max([('긍정', n_pos), ('부정', n_neg), ('중립', n_neu)], key=lambda x: x[1])
+    dom_pct = dom_count / n if n else 0
+
+    # 직업군 차이
+    if 'occupation' in df.columns and 'sentiment' in df.columns:
+        occ_cnt = df['occupation'].value_counts()
+        valid   = occ_cnt[occ_cnt >= 2].index
+        if len(valid) >= 2:
+            occ_rate = df[df['occupation'].isin(valid)].groupby('occupation')['sentiment'].apply(
+                lambda x: (x == '긍정').mean()
+            )
+            if len(occ_rate) >= 2 and occ_rate.max() - occ_rate.min() >= 0.25:
+                best, worst = occ_rate.idxmax(), occ_rate.idxmin()
+                return (f"{dom_label} 우세 ({dom_pct:.0%}) — "
+                        f"{best} 긍정률 {occ_rate[best]:.0%} vs {worst} {occ_rate[worst]:.0%}, 직군 간 격차 뚜렷")
+
+    # 성별 차이
+    if 'sex' in df.columns and 'sentiment' in df.columns:
+        sex_rate = df.groupby('sex')['sentiment'].apply(lambda x: (x == '긍정').mean())
+        if len(sex_rate) >= 2 and sex_rate.max() - sex_rate.min() >= 0.20:
+            high = sex_rate.idxmax()
+            return (f"{dom_label} 우세 ({dom_pct:.0%}) — "
+                    f"{high}의 긍정률이 {sex_rate[high]:.0%}로 더 높음")
+
+    # 기본 요약
+    pos_pct = n_pos / n if n else 0
+    if pos_pct >= 0.60:
+        return f"전반적 긍정 반응 ({pos_pct:.0%}) — 과반이 수용 의향"
+    elif n_neg / n >= 0.40 if n else False:
+        return f"저항 비율 높음 ({n_neg/n:.0%}) — 도입 장벽 점검 필요"
+    else:
+        return f"{dom_label} 우세 ({dom_pct:.0%}) — 응답 {n}명 중 절반 이상 유보적"
+
+
 def write_html_report(
     csv_path: str,
     df: pd.DataFrame,
@@ -604,71 +680,134 @@ def write_html_report(
     """시뮬 결과 DataFrame → self-contained HTML 리포트(다크모드) 생성 + 브라우저 자동 열기."""
     import json, os, webbrowser
 
-    title = topic.replace('_', ' ') or '시뮬 결과'
-    today = datetime.date.today().isoformat()
-    n = len(df)
+    title    = topic.replace('_', ' ') or '시뮬 결과'
+    today    = datetime.date.today().isoformat()
+    n        = len(df)
+    geo_col  = next((c for c in ['province','state','prefecture','departement','planning_area'] if c in df.columns), None)
+    loc2_col = next((c for c in ['district','city','area','commune','municipality'] if c in df.columns), None)
 
-    geo_col  = next((c for c in ['province', 'state', 'prefecture', 'departement', 'planning_area']
-                     if c in df.columns), None)
-    loc2_col = next((c for c in ['district', 'city', 'area', 'commune', 'municipality']
-                     if c in df.columns), None)
-
-    # ── 차트 데이터 ──────────────────────────────────────────────────────────
-    sent = df['sentiment'].value_counts() if 'sentiment' in df.columns else {}
-    n_pos, n_neg, n_neu = int(sent.get('긍정', 0)), int(sent.get('부정', 0)), int(sent.get('중립', 0))
+    # ── 기본 통계 ────────────────────────────────────────────────────────────
+    sent  = df['sentiment'].value_counts() if 'sentiment' in df.columns else {}
+    n_pos = int(sent.get('긍정', 0))
+    n_neg = int(sent.get('부정', 0))
+    n_neu = int(sent.get('중립', 0))
     pie_data = json.dumps([n_pos, n_neg, n_neu])
 
-    # 나이대×감성 스택 바
+    # ── 핵심 발견 ─────────────────────────────────────────────────────────────
+    insights     = _auto_insights(df)
+    insight_html = ''.join(f'<li>{i}</li>' for i in insights) if insights else '<li>인사이트를 추출할 데이터가 부족합니다.</li>'
+    headline     = _headline(df, n_pos, n_neg, n_neu, n)
+
+    # ── 세그먼트 차트 (조건부) ────────────────────────────────────────────────
+    seg_html_parts: list[str] = []
+    seg_js_parts:   list[str] = []
+
+    def _stacked_js(chart_id, labels, pos_c, neg_c, neu_c):
+        return (
+            f"new Chart(document.getElementById('{chart_id}'), {{"
+            f"type:'bar',"
+            f"data:{{labels:{json.dumps(labels)},datasets:["
+            f"{{label:'긍정',data:{json.dumps(pos_c)},backgroundColor:'#3fb950'}},"
+            f"{{label:'부정',data:{json.dumps(neg_c)},backgroundColor:'#f85149'}},"
+            f"{{label:'중립',data:{json.dumps(neu_c)},backgroundColor:'#6e7681'}}"
+            f"]}},"
+            f"options:{{scales:{{x:{{...DS.x,stacked:true}},y:{{...DS.y,stacked:true}}}},"
+            f"plugins:{{legend:{{labels:{{color:'#c9d1d9'}},position:'bottom'}}}},"
+            f"responsive:true,maintainAspectRatio:true}}}});"
+        )
+
+    def _add_seg(col, chart_id, title, desc, min_count=2, max_groups=8):
+        if col not in df.columns or 'sentiment' not in df.columns:
+            return
+        vals  = df[col].value_counts()
+        valid = vals[vals >= min_count].index.tolist()[:max_groups]
+        if len(valid) < 2:
+            return
+        pc = [int(((df[col]==v)&(df['sentiment']=='긍정')).sum()) for v in valid]
+        nc = [int(((df[col]==v)&(df['sentiment']=='부정')).sum()) for v in valid]
+        uc = [int(((df[col]==v)&(df['sentiment']=='중립')).sum()) for v in valid]
+        seg_html_parts.append(
+            f'<div class="chart-box"><div class="chart-title">{_he(title)}</div>'
+            f'<div class="chart-desc">{_he(desc)}</div>'
+            f'<canvas id="{chart_id}"></canvas></div>'
+        )
+        seg_js_parts.append(_stacked_js(chart_id, valid, pc, nc, uc))
+
+    # 나이대 (3개 이상)
     df2 = df.copy()
     df2['나이대'] = df2['age'].apply(_age_group)
-    age_groups = [g for g in ['20대', '30대', '40대', '50대', '60대+', '10대'] if g in df2['나이대'].values]
-    ag_pos = [int(((df2['나이대'] == g) & (df2['sentiment'] == '긍정')).sum()) for g in age_groups]
-    ag_neg = [int(((df2['나이대'] == g) & (df2['sentiment'] == '부정')).sum()) for g in age_groups]
-    ag_neu = [int(((df2['나이대'] == g) & (df2['sentiment'] == '중립')).sum()) for g in age_groups]
-    age_labels = json.dumps(age_groups)
+    age_groups = [g for g in ['10대','20대','30대','40대','50대','60대+'] if g in df2['나이대'].values]
+    if len(age_groups) >= 3:
+        ag_pos = [int(((df2['나이대']==g)&(df2['sentiment']=='긍정')).sum()) for g in age_groups]
+        ag_neg = [int(((df2['나이대']==g)&(df2['sentiment']=='부정')).sum()) for g in age_groups]
+        ag_neu = [int(((df2['나이대']==g)&(df2['sentiment']=='중립')).sum()) for g in age_groups]
+        seg_html_parts.append(
+            '<div class="chart-box"><div class="chart-title">나이대별 반응</div>'
+            '<div class="chart-desc">연령층별 수용·거부 분포</div>'
+            '<canvas id="ageChart"></canvas></div>'
+        )
+        seg_js_parts.append(_stacked_js('ageChart', age_groups, ag_pos, ag_neg, ag_neu))
 
-    # 응답 길이 by 감성 (박스플롯 대신 평균 바)
-    len_labels, len_vals, len_colors = [], [], []
-    for s, c in [('긍정', '#3fb950'), ('중립', '#6e7681'), ('부정', '#f85149')]:
-        sub = df[df['sentiment'] == s]['answer'].str.len() if 'sentiment' in df.columns else pd.Series(dtype=float)
-        if len(sub) > 0:
-            len_labels.append(f"{s}({len(sub)}명)")
-            len_vals.append(round(float(sub.mean()), 1))
-            len_colors.append(c)
+    # 직업군 (2종+, 각 2명+)
+    _add_seg('occupation', 'occChart', '직업군별 반응', '직군 간 수용도 차이 비교')
 
-    # 인사이트
-    insights = _auto_insights(df)
-    insight_html = ''.join(f'<li>{i}</li>' for i in insights) if insights else '<li>인사이트를 추출할 데이터가 부족합니다.</li>'
+    # 성별 (양쪽 3명+)
+    if 'sex' in df.columns:
+        if (df['sex'].value_counts() >= 3).sum() >= 2:
+            _add_seg('sex', 'sexChart', '성별 반응', '남/여 반응 분포 비교', min_count=3)
 
-    # ── 응답 카드 ─────────────────────────────────────────────────────────────
-    SENT_COLOR = {'긍정': '#3fb950', '부정': '#f85149', '중립': '#6e7681'}
+    # 반응 분포 레이아웃: 세그먼트 있으면 도넛+그리드, 없으면 도넛 단독
+    if seg_html_parts:
+        dist_section = (
+            '<div class="dist-wrap">'
+            '<div class="chart-box donut-box">'
+            '<div class="chart-title">전체 반응 비율</div>'
+            '<div class="chart-desc">수용·거부·유보 비율</div>'
+            '<canvas id="pieChart"></canvas></div>'
+            f'<div class="seg-grid">{"".join(seg_html_parts)}</div>'
+            '</div>'
+        )
+    else:
+        dist_section = (
+            '<div style="max-width:320px">'
+            '<div class="chart-box">'
+            '<div class="chart-title">전체 반응 비율</div>'
+            '<div class="chart-desc">수용·거부·유보 비율</div>'
+            '<canvas id="pieChart"></canvas></div></div>'
+        )
+
+    # ── 주목할 응답 ────────────────────────────────────────────────────────────
+    notable = _select_notable_quotes(df, geo_col, loc2_col)
+    quotes_html = '\n'.join(
+        f'<div class="quote-card" style="border-top:3px solid {q["color"]}">'
+        f'<div class="quote-label" style="color:{q["color"]}">{_he(q["label"])}</div>'
+        f'<blockquote class="quote-text">&#8220;{_he(q["answer"])}&#8221;</blockquote>'
+        f'<div class="quote-profile">{_he(q["profile"])}</div>'
+        f'</div>'
+        for q in notable
+    ) if notable else '<p style="color:var(--muted);font-size:.85rem">주목할 응답을 추출할 데이터가 부족합니다.</p>'
+
+    # ── 개별 응답 카드 ─────────────────────────────────────────────────────────
+    SENT_COLOR     = {'긍정': '#3fb950', '부정': '#f85149', '중립': '#6e7681'}
     SENT_BORDER_BG = {'긍정': 'rgba(63,185,80,.12)', '부정': 'rgba(248,81,73,.12)', '중립': 'rgba(110,118,129,.1)'}
-
     cards_html = []
     for _, r in df.iterrows():
         sl  = r.get('sentiment', '중립')
         col = SENT_COLOR.get(sl, '#6e7681')
         bg  = SENT_BORDER_BG.get(sl, 'rgba(110,118,129,.1)')
         g1  = _he(str(r[geo_col])) if geo_col else ''
-        g2  = f" {_he(str(r[loc2_col]))}" if loc2_col else ''
+        g2  = f' {_he(str(r[loc2_col]))}' if loc2_col else ''
         ans = _he(str(r['answer'])) if r['answer'] else '<em style="color:#6e7681">응답 없음</em>'
-        cards_html.append(f"""
-      <div class="card" data-sentiment="{_he(sl)}" style="border-left:3px solid {col};background:{bg}">
-        <div class="card-header">
-          <span class="profile">{_he(str(r['age']))}세 {_he(str(r['sex']))} · {_he(str(r['occupation']))} · {g1}{g2}</span>
-          <span class="badge" style="background:{col}">{_he(sl)}</span>
-        </div>
-        <p class="answer">{ans}</p>
-      </div>""")
+        cards_html.append(
+            f'<div class="card" data-sentiment="{_he(sl)}" style="border-left:3px solid {col};background:{bg}">'
+            f'<div class="card-header">'
+            f'<span class="profile">{_he(str(r["age"]))}세 {_he(str(r["sex"]))} · {_he(str(r["occupation"]))} · {g1}{g2}</span>'
+            f'<span class="badge" style="background:{col}">{_he(sl)}</span>'
+            f'</div><p class="answer">{ans}</p></div>'
+        )
     cards_joined = '\n'.join(cards_html)
 
-    # ── Chart.js 공통 다크 옵션 ───────────────────────────────────────────────
-    dark_scales = """{
-      x: { grid:{color:'rgba(255,255,255,0.06)'}, ticks:{color:'#8b949e'} },
-      y: { grid:{color:'rgba(255,255,255,0.06)'}, ticks:{color:'#8b949e'} }
-    }"""
-    dark_legend = "{ labels:{ color:'#c9d1d9' }, position:'bottom' }"
-
+    # ── HTML ──────────────────────────────────────────────────────────────────
     html = f"""<!DOCTYPE html>
 <html lang="ko">
 <head>
@@ -677,62 +816,51 @@ def write_html_report(
 <title>{_he(title)} — market-simulation</title>
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4/dist/chart.umd.min.js"></script>
 <style>
-:root {{
-  --bg:      #0d1117;
-  --surface: #161b22;
-  --card:    #21262d;
-  --border:  #30363d;
-  --text:    #e6edf3;
-  --muted:   #8b949e;
-  --green:   #3fb950;
-  --red:     #f85149;
-  --blue:    #58a6ff;
-  --yellow:  #d29922;
-}}
-* {{ box-sizing:border-box; margin:0; padding:0; }}
-body {{ font-family:-apple-system,'Malgun Gothic',sans-serif; background:var(--bg); color:var(--text); line-height:1.6; }}
-a {{ color:var(--blue); }}
-.wrap {{ max-width:980px; margin:0 auto; padding:28px 18px 48px; }}
-h1 {{ font-size:1.55rem; font-weight:700; letter-spacing:-.01em; }}
-h2 {{ font-size:1rem; font-weight:600; color:var(--muted); text-transform:uppercase; letter-spacing:.06em;
-      margin:32px 0 14px; border-bottom:1px solid var(--border); padding-bottom:6px; }}
-.meta {{ color:var(--muted); font-size:.82rem; margin:5px 0 18px; }}
-.disclaimer {{ background:rgba(248,81,73,.1); border:1px solid rgba(248,81,73,.3);
-               padding:9px 14px; border-radius:6px; font-size:.8rem; color:#ffa198; margin-bottom:16px; }}
-.question-box {{ background:rgba(210,153,34,.08); border-left:3px solid var(--yellow);
-                 padding:11px 16px; border-radius:4px; font-style:italic; margin-bottom:24px; color:#e3b341; }}
-/* 지표 */
-.stats-row {{ display:flex; gap:10px; flex-wrap:wrap; margin-bottom:6px; }}
-.stat-box {{ flex:1; min-width:110px; background:var(--surface); border:1px solid var(--border);
-             border-radius:8px; padding:14px 16px; text-align:center; }}
-.stat-num {{ font-size:1.9rem; font-weight:700; }}
-.stat-lbl {{ font-size:.75rem; color:var(--muted); margin-top:3px; }}
-/* 인사이트 */
-.insight-box {{ background:var(--surface); border:1px solid var(--border); border-radius:8px;
-                padding:14px 18px; margin-bottom:6px; }}
-.insight-box ul {{ padding-left:18px; }}
-.insight-box li {{ font-size:.88rem; margin-bottom:6px; color:#c9d1d9; }}
-/* 차트 */
-.charts-row {{ display:grid; grid-template-columns:1fr 1fr; gap:14px; margin-bottom:6px; }}
-.chart-box {{ background:var(--surface); border:1px solid var(--border); border-radius:8px; padding:16px; }}
-.chart-box canvas {{ max-height:230px; }}
-.chart-title {{ font-size:.8rem; font-weight:600; color:var(--muted); margin-bottom:10px; }}
-.chart-desc  {{ font-size:.73rem; color:#6e7681; margin-bottom:8px; }}
-/* 필터 */
-.filter-bar {{ display:flex; gap:8px; margin:18px 0 12px; flex-wrap:wrap; }}
-.filter-btn {{ padding:5px 16px; border-radius:20px; border:1px solid var(--border);
-               background:transparent; color:var(--muted); cursor:pointer; font-size:.82rem; transition:.15s; }}
-.filter-btn:hover {{ border-color:var(--text); color:var(--text); }}
-.filter-btn.active {{ background:var(--text); color:var(--bg); border-color:var(--text); }}
-/* 카드 */
-.card {{ border-radius:6px; padding:12px 16px; margin-bottom:10px; transition:.12s; }}
-.card.hidden {{ display:none; }}
-.card-header {{ display:flex; justify-content:space-between; align-items:center; margin-bottom:7px; gap:8px; }}
-.profile {{ font-size:.78rem; color:var(--muted); flex:1; }}
-.badge {{ font-size:.72rem; color:#000; padding:2px 9px; border-radius:12px; font-weight:700; white-space:nowrap; }}
-.answer {{ font-size:.88rem; line-height:1.7; color:#c9d1d9; }}
-footer {{ text-align:center; font-size:.72rem; color:#6e7681; margin-top:36px; }}
-@media(max-width:640px) {{ .charts-row {{ grid-template-columns:1fr; }} }}
+:root{{--bg:#0d1117;--surface:#161b22;--card:#21262d;--border:#30363d;--text:#e6edf3;--muted:#8b949e;--green:#3fb950;--red:#f85149;--blue:#58a6ff;--yellow:#d29922;}}
+*{{box-sizing:border-box;margin:0;padding:0;}}
+body{{font-family:-apple-system,'Malgun Gothic',sans-serif;background:var(--bg);color:var(--text);line-height:1.6;}}
+.wrap{{max-width:1080px;margin:0 auto;padding:28px 18px 56px;}}
+h1{{font-size:1.55rem;font-weight:700;letter-spacing:-.01em;}}
+h2{{font-size:.82rem;font-weight:600;color:var(--muted);text-transform:uppercase;letter-spacing:.07em;margin:36px 0 14px;border-bottom:1px solid var(--border);padding-bottom:6px;}}
+.meta{{color:var(--muted);font-size:.82rem;margin:5px 0 18px;}}
+.disclaimer{{background:rgba(248,81,73,.1);border:1px solid rgba(248,81,73,.3);padding:9px 14px;border-radius:6px;font-size:.8rem;color:#ffa198;margin-bottom:16px;}}
+.question-box{{background:rgba(210,153,34,.08);border-left:3px solid var(--yellow);padding:11px 16px;border-radius:4px;font-style:italic;margin-bottom:24px;color:#e3b341;}}
+/* 핵심 발견 */
+.hero-box{{background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:18px 22px;margin-bottom:6px;}}
+.hero-headline{{font-size:1.05rem;font-weight:600;color:var(--text);margin-bottom:14px;line-height:1.5;}}
+.hero-box ul{{padding-left:18px;}}
+.hero-box li{{font-size:.875rem;margin-bottom:8px;color:#c9d1d9;line-height:1.55;}}
+/* 핵심 지표 */
+.stats-row{{display:flex;gap:10px;flex-wrap:wrap;margin-bottom:6px;}}
+.stat-box{{flex:1;min-width:110px;background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:14px 16px;text-align:center;}}
+.stat-num{{font-size:1.9rem;font-weight:700;}}
+.stat-lbl{{font-size:.75rem;color:var(--muted);margin-top:3px;}}
+/* 반응 분포 */
+.dist-wrap{{display:grid;grid-template-columns:260px 1fr;gap:14px;margin-bottom:6px;align-items:start;}}
+.seg-grid{{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:14px;}}
+.chart-box{{background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:16px;}}
+.chart-box canvas{{max-height:220px;}}
+.chart-title{{font-size:.8rem;font-weight:600;color:var(--muted);margin-bottom:6px;}}
+.chart-desc{{font-size:.72rem;color:#6e7681;margin-bottom:8px;}}
+/* 주목할 응답 */
+.quote-grid{{display:grid;grid-template-columns:repeat(auto-fit,minmax(270px,1fr));gap:14px;margin-bottom:6px;}}
+.quote-card{{background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:18px 20px;display:flex;flex-direction:column;}}
+.quote-label{{font-size:.7rem;font-weight:700;text-transform:uppercase;letter-spacing:.07em;margin-bottom:10px;}}
+.quote-text{{font-size:.93rem;line-height:1.75;color:#c9d1d9;font-style:italic;flex:1;}}
+.quote-profile{{font-size:.74rem;color:var(--muted);margin-top:12px;padding-top:10px;border-top:1px solid var(--border);}}
+/* 개별 응답 */
+.filter-bar{{display:flex;gap:8px;margin:18px 0 12px;flex-wrap:wrap;}}
+.filter-btn{{padding:5px 16px;border-radius:20px;border:1px solid var(--border);background:transparent;color:var(--muted);cursor:pointer;font-size:.82rem;transition:.15s;}}
+.filter-btn:hover{{border-color:var(--text);color:var(--text);}}
+.filter-btn.active{{background:var(--text);color:var(--bg);border-color:var(--text);}}
+.card{{border-radius:6px;padding:12px 16px;margin-bottom:10px;}}
+.card.hidden{{display:none;}}
+.card-header{{display:flex;justify-content:space-between;align-items:center;margin-bottom:7px;gap:8px;}}
+.profile{{font-size:.78rem;color:var(--muted);flex:1;}}
+.badge{{font-size:.72rem;color:#000;padding:2px 9px;border-radius:12px;font-weight:700;white-space:nowrap;}}
+.answer{{font-size:.88rem;line-height:1.7;color:#c9d1d9;}}
+footer{{text-align:center;font-size:.72rem;color:#6e7681;margin-top:40px;}}
+@media(max-width:700px){{.dist-wrap{{grid-template-columns:1fr;}}}}
 </style>
 </head>
 <body>
@@ -742,6 +870,12 @@ footer {{ text-align:center; font-size:.72rem; color:#6e7681; margin-top:36px; }
   <div class="disclaimer">⚠ AI가 AI 페르소나를 연기하는 구조입니다. 실제 소비자 조사를 대체하지 않으며 통계적 대표성이 없습니다.</div>
   <div class="question-box">Q. {_he(question or '(질문 미입력)')}</div>
 
+  <h2>핵심 발견</h2>
+  <div class="hero-box">
+    <div class="hero-headline">{_he(headline)}</div>
+    <ul>{insight_html}</ul>
+  </div>
+
   <h2>핵심 지표</h2>
   <div class="stats-row">
     <div class="stat-box"><div class="stat-num">{n}</div><div class="stat-lbl">응답 수</div></div>
@@ -750,86 +884,38 @@ footer {{ text-align:center; font-size:.72rem; color:#6e7681; margin-top:36px; }
     <div class="stat-box"><div class="stat-num" style="color:var(--muted)">{n_neu}</div><div class="stat-lbl">중립 ({n_neu/n:.0%})</div></div>
   </div>
 
-  <h2>자동 인사이트</h2>
-  <div class="insight-box"><ul>{insight_html}</ul></div>
-
   <h2>반응 분포</h2>
-  <div class="charts-row">
-    <div class="chart-box">
-      <div class="chart-title">긍정 · 부정 · 중립 비율</div>
-      <div class="chart-desc">규칙 기반 자동 분류 — 응답 텍스트에서 수용/거부 표현 감지</div>
-      <canvas id="pieChart"></canvas>
-    </div>
-    <div class="chart-box">
-      <div class="chart-title">나이대별 반응</div>
-      <div class="chart-desc">어느 연령층이 더 긍정적/부정적인지 비교</div>
-      <canvas id="ageChart"></canvas>
-    </div>
-  </div>
+  {dist_section}
 
-  <h2>응답 깊이</h2>
-  <div class="chart-box" style="margin-bottom:6px">
-    <div class="chart-title">반응 유형별 평균 응답 길이 (글자 수)</div>
-    <div class="chart-desc">응답이 길수록 해당 입장에 대한 생각이나 감정이 많다는 신호입니다</div>
-    <canvas id="lenChart" style="max-height:160px"></canvas>
-  </div>
+  <h2>주목할 응답</h2>
+  <div class="quote-grid">{quotes_html}</div>
 
   <h2>개별 응답 ({n}건)</h2>
   <div class="filter-bar">
-    <button class="filter-btn active" onclick="filter('all')">전체</button>
-    <button class="filter-btn" onclick="filter('긍정')" style="color:var(--green)">긍정 {n_pos}명</button>
-    <button class="filter-btn" onclick="filter('부정')" style="color:var(--red)">부정 {n_neg}명</button>
-    <button class="filter-btn" onclick="filter('중립')" style="color:var(--muted)">중립 {n_neu}명</button>
+    <button class="filter-btn active" onclick="filterCards('all')">전체</button>
+    <button class="filter-btn" onclick="filterCards('긍정')" style="color:var(--green)">긍정 {n_pos}명</button>
+    <button class="filter-btn" onclick="filterCards('부정')" style="color:var(--red)">부정 {n_neg}명</button>
+    <button class="filter-btn" onclick="filterCards('중립')" style="color:var(--muted)">중립 {n_neu}명</button>
   </div>
   <div id="cards">{cards_joined}</div>
 
-  <footer>market-simulation v0.8 · LLM 시뮬 기반 가설 · 실제 시장 데이터 아님</footer>
+  <footer>market-simulation v0.9 · LLM 시뮬 기반 가설 · 실제 시장 데이터 아님</footer>
 </div>
 <script>
-Chart.defaults.color = '#8b949e';
-
-const darkScales = {{
-  x: {{ grid:{{color:'rgba(255,255,255,0.06)'}}, ticks:{{color:'#8b949e'}} }},
-  y: {{ grid:{{color:'rgba(255,255,255,0.06)'}}, ticks:{{color:'#8b949e'}} }}
+Chart.defaults.color='#8b949e';
+const DS={{
+  x:{{grid:{{color:'rgba(255,255,255,0.06)'}},ticks:{{color:'#8b949e'}}}},
+  y:{{grid:{{color:'rgba(255,255,255,0.06)'}},ticks:{{color:'#8b949e'}}}}
 }};
-
-// 도넛 — 반응 비율
-new Chart(document.getElementById('pieChart'), {{
+new Chart(document.getElementById('pieChart'),{{
   type:'doughnut',
-  data:{{ labels:['긍정','부정','중립'],
-    datasets:[{{ data:{pie_data}, backgroundColor:['#3fb950','#f85149','#6e7681'], borderWidth:2, borderColor:'#161b22' }}] }},
-  options:{{ plugins:{{ legend:{{ ...Chart.defaults.plugins?.legend, labels:{{color:'#c9d1d9'}}, position:'bottom' }} }}, responsive:true }}
+  data:{{labels:['긍정','부정','중립'],datasets:[{{data:{pie_data},backgroundColor:['#3fb950','#f85149','#6e7681'],borderWidth:2,borderColor:'#161b22'}}]}},
+  options:{{plugins:{{legend:{{labels:{{color:'#c9d1d9'}},position:'bottom'}}}},responsive:true}}
 }});
-
-// 나이대 스택 바
-new Chart(document.getElementById('ageChart'), {{
-  type:'bar',
-  data:{{
-    labels:{age_labels},
-    datasets:[
-      {{label:'긍정', data:{json.dumps(ag_pos)}, backgroundColor:'#3fb950'}},
-      {{label:'부정', data:{json.dumps(ag_neg)}, backgroundColor:'#f85149'}},
-      {{label:'중립', data:{json.dumps(ag_neu)}, backgroundColor:'#6e7681'}}
-    ]
-  }},
-  options:{{ scales:{{ x:{{...darkScales.x, stacked:true}}, y:{{...darkScales.y, stacked:true}} }},
-             plugins:{{ legend:{{ labels:{{color:'#c9d1d9'}}, position:'bottom' }} }}, responsive:true }}
-}});
-
-// 응답 길이 바
-new Chart(document.getElementById('lenChart'), {{
-  type:'bar',
-  data:{{ labels:{json.dumps(len_labels)},
-    datasets:[{{ data:{json.dumps(len_vals)}, backgroundColor:{json.dumps(len_colors)}, borderRadius:4 }}] }},
-  options:{{ indexAxis:'y', plugins:{{ legend:{{display:false}} }}, scales:darkScales, responsive:true }}
-}});
-
-// 카드 필터
-function filter(sent) {{
-  document.querySelectorAll('.card').forEach(c =>
-    c.classList.toggle('hidden', sent !== 'all' && c.dataset.sentiment !== sent));
-  document.querySelectorAll('.filter-btn').forEach(b =>
-    b.classList.toggle('active', b.textContent.startsWith(sent === 'all' ? '전체' : sent)));
+{chr(10).join(seg_js_parts)}
+function filterCards(s){{
+  document.querySelectorAll('.card').forEach(c=>c.classList.toggle('hidden',s!=='all'&&c.dataset.sentiment!==s));
+  document.querySelectorAll('.filter-btn').forEach(b=>b.classList.toggle('active',b.textContent.startsWith(s==='all'?'전체':s)));
 }}
 </script>
 </body>

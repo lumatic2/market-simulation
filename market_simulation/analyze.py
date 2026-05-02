@@ -451,6 +451,34 @@ def _jss(s) -> str:
     return str(s).replace('\\', '\\\\').replace("'", "\\'").replace('\n', ' ').replace('\r', '')
 
 
+def _diff_keywords(pos_texts: list[str], neg_texts: list[str], top_n: int = 4) -> tuple[list[str], list[str]]:
+    """긍정/부정 응답에서 차별 키워드 추출 (상대방 텍스트에 없는 단어 우선)."""
+    pos_cnt = Counter()
+    neg_cnt = Counter()
+    for t in pos_texts:
+        pos_cnt.update(_tokenize(t))
+    for t in neg_texts:
+        neg_cnt.update(_tokenize(t))
+
+    pos_total = max(len(pos_texts), 1)
+    neg_total = max(len(neg_texts), 1)
+
+    # 긍정에서 상대적으로 많이 나오는 단어 (TF 비율 차이)
+    pos_diff = sorted(
+        {w for w in pos_cnt if pos_cnt[w] >= 2},
+        key=lambda w: pos_cnt[w] / pos_total - neg_cnt.get(w, 0) / neg_total,
+        reverse=True,
+    )[:top_n]
+
+    neg_diff = sorted(
+        {w for w in neg_cnt if neg_cnt[w] >= 2},
+        key=lambda w: neg_cnt[w] / neg_total - pos_cnt.get(w, 0) / pos_total,
+        reverse=True,
+    )[:top_n]
+
+    return pos_diff, neg_diff
+
+
 def _auto_insights(df: pd.DataFrame) -> list[str]:
     """응답 데이터에서 자동으로 인사이트 문장을 생성한다."""
     insights = []
@@ -478,8 +506,66 @@ def _auto_insights(df: pd.DataFrame) -> list[str]:
         if abs(pa - na) >= 3:
             direction = "젊을수록" if pa < na else "나이 들수록"
             insights.append(
-                f"{direction} 긍정 반응이 많습니다 "
-                f"(긍정 평균 {pa:.1f}세 vs 부정 평균 {na:.1f}세)."
+                f"{direction} 긍정 반응이 더 많습니다 "
+                f"(긍정 평균 {pa:.1f}세 · 부정 평균 {na:.1f}세)."
+            )
+
+    # 성별 긍정률 차이
+    if 'sex' in df.columns:
+        sex_rate = df.groupby('sex')['sentiment'].apply(lambda x: (x == '긍정').mean())
+        if len(sex_rate) >= 2:
+            smax, smin = sex_rate.idxmax(), sex_rate.idxmin()
+            if sex_rate[smax] - sex_rate[smin] > 0.15:
+                insights.append(
+                    f"<b>{smax}</b>의 긍정률 {sex_rate[smax]:.0%}로 "
+                    f"{smin}({sex_rate[smin]:.0%})보다 높습니다."
+                )
+
+    # 직업군 최고·최저 긍정률
+    if 'occupation' in df.columns:
+        occ_cnt = df['occupation'].value_counts()
+        valid_occ = occ_cnt[occ_cnt >= 2].index
+        if len(valid_occ) >= 2:
+            occ_rate = (df[df['occupation'].isin(valid_occ)]
+                        .groupby('occupation')['sentiment']
+                        .apply(lambda x: (x == '긍정').mean()))
+            if len(occ_rate) >= 2:
+                omax, omin = occ_rate.idxmax(), occ_rate.idxmin()
+                if occ_rate[omax] - occ_rate[omin] > 0.20:
+                    insights.append(
+                        f"직업군 중 <b>{omax}</b>이 긍정률 {occ_rate[omax]:.0%}로 가장 높고, "
+                        f"<b>{omin}</b>은 {occ_rate[omin]:.0%}로 가장 낮습니다."
+                    )
+
+    # 차별 키워드 — 긍정에만/부정에만 자주 나오는 단어 (양쪽 최소 3명 이상일 때만)
+    pos_texts = pos_df['answer'].dropna().tolist()
+    neg_texts = neg_df['answer'].dropna().tolist()
+    if len(pos_texts) >= 3 and len(neg_texts) >= 3:
+        pos_diff, neg_diff = _diff_keywords(pos_texts, neg_texts)
+        if pos_diff:
+            insights.append(
+                f"긍정 응답에서 두드러진 단어: "
+                + ', '.join(f'<b>{w}</b>' for w in pos_diff)
+                + " — 호감·수용 이유를 암시합니다."
+            )
+        if neg_diff:
+            insights.append(
+                f"부정 응답에서 두드러진 단어: "
+                + ', '.join(f'<b>{w}</b>' for w in neg_diff)
+                + " — 거부·저항 요인을 암시합니다."
+            )
+
+    # 조건부 긍정 비율 — "~다면", "~는데", "~지만" 등 명확한 조건·유보 표현
+    _COND_PATTERNS = re.compile(r'다면|한다면|이라면|는데요|지만|긴 하|다고는|하지만|망설|아직|좀 더|고민')
+    if len(pos_df) >= 3:
+        cond_count = pos_df['answer'].fillna('').apply(
+            lambda t: bool(_COND_PATTERNS.search(t))
+        ).sum()
+        cond_rate = cond_count / len(pos_df)
+        if cond_rate >= 0.40:
+            insights.append(
+                f"긍정 응답 중 {cond_rate:.0%}가 조건부 수용 — "
+                "'~다면', '~지만', '망설' 등 유보 표현을 포함합니다. 완전한 확신은 아닐 수 있습니다."
             )
 
     # 응답 길이 차이 — 부정이 길면 거부 이유가 많다는 신호
@@ -549,17 +635,6 @@ def write_html_report(
             len_labels.append(f"{s}({len(sub)}명)")
             len_vals.append(round(float(sub.mean()), 1))
             len_colors.append(c)
-
-    # 키워드 (상위 10)
-    def kw_data(texts):
-        kws = top_keywords(texts, 10)
-        return json.dumps([w for w, _ in kws]), json.dumps([c for _, c in kws])
-
-    kw_labels_all, kw_vals_all = kw_data(df['answer'].dropna().tolist())
-    pos_texts = df[df['sentiment'] == '긍정']['answer'].tolist() if 'sentiment' in df.columns else []
-    neg_texts = df[df['sentiment'] == '부정']['answer'].tolist() if 'sentiment' in df.columns else []
-    kw_labels_pos, kw_vals_pos = kw_data(pos_texts)
-    kw_labels_neg, kw_vals_neg = kw_data(neg_texts)
 
     # 인사이트
     insights = _auto_insights(df)
@@ -639,14 +714,10 @@ h2 {{ font-size:1rem; font-weight:600; color:var(--muted); text-transform:upperc
 .insight-box li {{ font-size:.88rem; margin-bottom:6px; color:#c9d1d9; }}
 /* 차트 */
 .charts-row {{ display:grid; grid-template-columns:1fr 1fr; gap:14px; margin-bottom:6px; }}
-.charts-row3 {{ display:grid; grid-template-columns:1fr 1fr 1fr; gap:12px; margin-bottom:6px; }}
 .chart-box {{ background:var(--surface); border:1px solid var(--border); border-radius:8px; padding:16px; }}
 .chart-box canvas {{ max-height:230px; }}
 .chart-title {{ font-size:.8rem; font-weight:600; color:var(--muted); margin-bottom:10px; }}
 .chart-desc  {{ font-size:.73rem; color:#6e7681; margin-bottom:8px; }}
-/* 키워드 */
-.kw-box {{ background:var(--surface); border:1px solid var(--border); border-radius:8px; padding:14px; }}
-.kw-box canvas {{ max-height:200px; }}
 /* 필터 */
 .filter-bar {{ display:flex; gap:8px; margin:18px 0 12px; flex-wrap:wrap; }}
 .filter-btn {{ padding:5px 16px; border-radius:20px; border:1px solid var(--border);
@@ -661,7 +732,7 @@ h2 {{ font-size:1rem; font-weight:600; color:var(--muted); text-transform:upperc
 .badge {{ font-size:.72rem; color:#000; padding:2px 9px; border-radius:12px; font-weight:700; white-space:nowrap; }}
 .answer {{ font-size:.88rem; line-height:1.7; color:#c9d1d9; }}
 footer {{ text-align:center; font-size:.72rem; color:#6e7681; margin-top:36px; }}
-@media(max-width:640px) {{ .charts-row,.charts-row3 {{ grid-template-columns:1fr; }} }}
+@media(max-width:640px) {{ .charts-row {{ grid-template-columns:1fr; }} }}
 </style>
 </head>
 <body>
@@ -698,28 +769,9 @@ footer {{ text-align:center; font-size:.72rem; color:#6e7681; margin-top:36px; }
 
   <h2>응답 깊이</h2>
   <div class="chart-box" style="margin-bottom:6px">
-    <div class="chart-title">감성별 평균 응답 길이 (글자 수)</div>
+    <div class="chart-title">반응 유형별 평균 응답 길이 (글자 수)</div>
     <div class="chart-desc">응답이 길수록 해당 입장에 대한 생각이나 감정이 많다는 신호입니다</div>
     <canvas id="lenChart" style="max-height:160px"></canvas>
-  </div>
-
-  <h2>언급 키워드</h2>
-  <div class="charts-row3">
-    <div class="kw-box">
-      <div class="chart-title">전체 응답</div>
-      <div class="chart-desc">모든 응답에서 자주 등장한 핵심 단어</div>
-      <canvas id="kwAll"></canvas>
-    </div>
-    <div class="kw-box">
-      <div class="chart-title" style="color:var(--green)">긍정 응답만</div>
-      <div class="chart-desc">수용·구매 이유 힌트 — 이 단어들이 호감 요소</div>
-      <canvas id="kwPos"></canvas>
-    </div>
-    <div class="kw-box">
-      <div class="chart-title" style="color:var(--red)">부정 응답만</div>
-      <div class="chart-desc">거부·저항 이유 힌트 — 이 단어들이 장벽 요소</div>
-      <canvas id="kwNeg"></canvas>
-    </div>
   </div>
 
   <h2>개별 응답 ({n}건)</h2>
@@ -731,7 +783,7 @@ footer {{ text-align:center; font-size:.72rem; color:#6e7681; margin-top:36px; }
   </div>
   <div id="cards">{cards_joined}</div>
 
-  <footer>market-simulation v0.6 · LLM 시뮬 기반 가설 · 실제 시장 데이터 아님</footer>
+  <footer>market-simulation v0.8 · LLM 시뮬 기반 가설 · 실제 시장 데이터 아님</footer>
 </div>
 <script>
 Chart.defaults.color = '#8b949e';
@@ -771,19 +823,6 @@ new Chart(document.getElementById('lenChart'), {{
     datasets:[{{ data:{json.dumps(len_vals)}, backgroundColor:{json.dumps(len_colors)}, borderRadius:4 }}] }},
   options:{{ indexAxis:'y', plugins:{{ legend:{{display:false}} }}, scales:darkScales, responsive:true }}
 }});
-
-// 키워드 공통 함수
-function kwChart(id, labels, vals, color) {{
-  new Chart(document.getElementById(id), {{
-    type:'bar',
-    data:{{ labels:labels, datasets:[{{data:vals, backgroundColor:color, borderRadius:3}}] }},
-    options:{{ indexAxis:'y', plugins:{{legend:{{display:false}}}}, scales:darkScales, responsive:true,
-               layout:{{padding:{{right:8}}}} }}
-  }});
-}}
-kwChart('kwAll', {kw_labels_all}, {kw_vals_all}, '#58a6ff');
-kwChart('kwPos', {kw_labels_pos}, {kw_vals_pos}, '#3fb950');
-kwChart('kwNeg', {kw_labels_neg}, {kw_vals_neg}, '#f85149');
 
 // 카드 필터
 function filter(sent) {{

@@ -71,21 +71,41 @@ description: >
 
 ---
 
-## 시작 전 의존성 확인
+## 시작 전 의존성 + 버전 확인
 
 ```python
-import importlib.util, subprocess, sys
+import importlib.util, importlib.metadata, subprocess, sys, re
+
+# 1. 누락 패키지 설치
 pip_map = {'datasets': 'datasets', 'pandas': 'pandas', 'pyarrow': 'pyarrow', 'market_simulation': 'market-simulation'}
 missing = [pip_map[m] for m in pip_map if not importlib.util.find_spec(m)]
 if missing:
     print(f'패키지 설치 중: {missing}', flush=True)
     subprocess.check_call([sys.executable, '-m', 'pip', 'install', '-q'] + missing)
-    print('설치 완료', flush=True)
-else:
-    print('OK', flush=True)
+    print('설치 완료 — 계속 진행합니다.', flush=True)
+
+# 2. 버전 체크 (최신 여부 확인, 5초 타임아웃)
+try:
+    installed = importlib.metadata.version('market-simulation')
+    r = subprocess.run(
+        [sys.executable, '-m', 'pip', 'index', 'versions', 'market-simulation'],
+        capture_output=True, text=True, timeout=5
+    )
+    m = re.search(r'LATEST:\s+(\S+)', r.stdout)
+    latest = m.group(1) if m else None
+    if latest and latest != installed:
+        print(f'⚠ 스킬 업데이트 있음: {installed} → {latest}')
+        print('  지금 업데이트하려면:')
+        print('  pip install --upgrade market-simulation && market-simulation install-skill')
+        print('  (설치 후 Claude Code 세션 재시작 필요)')
+    else:
+        print(f'OK (market-simulation {installed})', flush=True)
+except Exception:
+    print(f'OK', flush=True)
 ```
 
-`sys.executable`로 Claude Code Bash 툴이 사용하는 Python에 직접 설치하므로 환경 불일치 문제가 없다.
+`sys.executable`로 Claude Code Bash 툴이 사용하는 Python에 직접 설치하므로 환경 불일치 문제가 없다.  
+버전 체크는 PyPI에 네트워크 요청 1회 (~1초). 오프라인 환경에서는 조용히 스킵된다.
 
 ---
 
@@ -207,10 +227,17 @@ report_path = write_report(csv_path, topic=topic, question=question)
 print(f'report: {report_path}')
 ```
 
+리포트는 다음 섹션을 자동 생성한다:
+- **감성 분포** — 긍정/부정/중립 비율 (규칙 기반 자동 레이블링)
+- **세그먼트 프로파일** — 긍정군 vs 부정군 평균 나이·직업 비교
+- **인구통계 × 감성 교차표** — 나이대·직업·지역별 긍정율/부정율
+- **키워드 분석** — 전체/긍정/부정 응답 상위 빈도 어휘
+- **positive bias 경고** — 긍정률 70% 초과 시 자동 플래그
+
 리포트 생성 후 Claude가 직접:
-- 응답률·핵심 군집 1단락 요약
+- 교차표에서 세그먼트 간 눈에 띄는 차이 1단락 해석
 - 핵심 인용 3~5개 선별
-- 미충족 니즈·거부 사유 추출
+- 거부 이유 키워드 패턴 요약
 - 산출물 경로 안내
 - 후속 분석 제안 1줄
 

@@ -6,9 +6,9 @@
 - [x] `src/analyze.py` — 결과 CSV → 통계 리포트 (Agent 방식 맞게 정제)
 - [x] `SKILL.md` — 배치 5명 × 최대 6 에이전트, 30명 하드캡
 - [x] `pyproject.toml`, `CLAUDE.md`
-- [ ] `.gitignore` 추가
-- [ ] GitHub 레포 생성 및 초기 커밋
-- [ ] README.md (영문, 공개용)
+- [x] `.gitignore` 추가
+- [x] GitHub 레포 생성 및 초기 커밋
+- [x] README.md (영문, 공개용)
 
 ## v0.2 — 검증
 

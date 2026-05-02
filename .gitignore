@@ -4,4 +4,6 @@ __pycache__/
 .venv*/
 *.egg-info/
 dist/
+build/
 .cache/
+market_simulation/SKILL.md

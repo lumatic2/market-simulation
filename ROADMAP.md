@@ -24,8 +24,8 @@
 - [x] personas.py 수집 후 재셔플 — filter 단계 편향 완화, 도큐스트링 한계 명시
 - [x] README 한국어 상단 + 영어 하단 이중 언어 재작성, 단계 번호 버그 수정
 - [x] 새 사용자 시뮬 3회 반복 → UX 문제 7개 발견·수정 (mkdir, Windows curl, 세션 재시작 안내 등)
-- [ ] Japan 페르소나 연동 테스트
-- [ ] SKILL.md 이중 관리 해결 — 루트 SKILL.md → 빌드 시 market_simulation/SKILL.md 자동 복사
+- [x] Japan 페르소나 연동 테스트 — prefecture/area/marital_status 컬럼 확인, 도쿄 필터·카드 생성 정상
+- [x] SKILL.md 이중 관리 해결 — setup.py build_py 훅으로 루트 → 패키지 자동 복사, market_simulation/SKILL.md gitignore 처리
 
 ## 이어서 할 일
 
@@ -36,7 +36,7 @@
 
 ## v0.3 — 공개 준비
 
-- [ ] SKILL.md 단일 소스 관리 (빌드 시 자동 동기화)
-- [ ] Japan 시뮬 검증
-- [ ] 예제 스크립트 (`examples/coffee_shop.py`)
+- [x] SKILL.md 단일 소스 관리 (setup.py build_py 훅)
+- [x] Japan 시뮬 검증
+- [x] 예제 스크립트 (`examples/coffee_shop.py`)
 - [ ] 소프트론치 피드백 반영

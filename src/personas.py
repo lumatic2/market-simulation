@@ -4,6 +4,11 @@ Nemotron-Personas 로드 / 필터 / 카드 빌더.
 HuggingFace datasets 라이브러리로 스트리밍 로드 — 로컬 설치 불필요.
 지원 국가: korea, japan
 
+컬럼 스키마 차이:
+  Korea: province, district, family_type, housing_type
+  Japan: prefecture, area, region, marital_status (province/district 없음)
+filter_pool(province=...) 는 두 스키마 모두 처리.
+
 사용 예:
     from src.personas import load_pool, filter_pool, persona_to_card, occupation_kw
     df = load_pool('korea', sample_n=50000)
@@ -62,6 +67,7 @@ def load_pool(country: str = 'korea', sample_n: int = 50000, seed: int = 42) -> 
     if not ds_id:
         raise ValueError(f'country는 {list(DATASET_IDS)} 중 하나여야 합니다.')
 
+    print(f'[{country}] HuggingFace 스트리밍 로드 중... (첫 실행은 캐시 없으면 수십 초 소요)', flush=True)
     ds = load_dataset(ds_id, split='train', streaming=True)
     ds = ds.shuffle(seed=seed, buffer_size=100_000)
     rows = []
@@ -69,6 +75,9 @@ def load_pool(country: str = 'korea', sample_n: int = 50000, seed: int = 42) -> 
         if i >= sample_n:
             break
         rows.append(row)
+        if (i + 1) % 10000 == 0:
+            print(f'  {i + 1:,} / {sample_n:,} 행 수집...', flush=True)
+    print(f'  완료: {len(rows):,}행 로드됨', flush=True)
     return pd.DataFrame(rows).reset_index(drop=True)
 
 
@@ -80,12 +89,19 @@ def filter_pool(
     sex: str | None = None,
     occupation_keywords: list[str] | None = None,
 ) -> pd.DataFrame:
-    """조건 AND로 누적 필터. 결과가 요청 N의 3배 미만이면 호출자가 조건 완화."""
+    """조건 AND로 누적 필터. 결과가 요청 N의 3배 미만이면 호출자가 조건 완화.
+
+    Korea/Japan 스키마 자동 감지:
+      province 파라미터 → 'province' 컬럼(Korea) 또는 'prefecture' 컬럼(Japan)
+      district 파라미터 → 'district' 컬럼(Korea) 또는 'area' 컬럼(Japan)
+    """
     m = pd.Series(True, index=df.index)
     if province is not None:
-        m &= df['province'].isin([province] if isinstance(province, str) else province)
+        col = 'province' if 'province' in df.columns else 'prefecture'
+        m &= df[col].isin([province] if isinstance(province, str) else province)
     if district is not None:
-        m &= df['district'].isin([district] if isinstance(district, str) else district)
+        col = 'district' if 'district' in df.columns else 'area'
+        m &= df[col].isin([district] if isinstance(district, str) else district)
     if age_range is not None:
         m &= df['age'].between(*age_range)
     if sex is not None:
@@ -96,14 +112,22 @@ def filter_pool(
     return df[m]
 
 
+def _location(p) -> str:
+    """Korea/Japan 스키마 모두에서 지역 문자열 반환."""
+    if 'province' in p.index:
+        return f"{p['province']} {p['district']}"
+    return f"{p.get('prefecture', '')} {p.get('area', '')}".strip()
+
+
 def persona_to_card(p, idx: int = 0) -> str:
     """페르소나 1행 → Agent 프롬프트용 구조화 텍스트.
 
     출력 번호(idx+1)는 에이전트 응답 파싱 시 '## 응답 N' 과 1:1 대응한다.
+    Korea/Japan 스키마 모두 지원.
     """
     return (
         f"## 인물 {idx+1}\n"
-        f"- 기본: {p['sex']}, {p['age']}세, {p['province']} {p['district']}, {p['occupation']}, {p['education_level']}\n"
+        f"- 기본: {p['sex']}, {p['age']}세, {_location(p)}, {p['occupation']}, {p['education_level']}\n"
         f"- 배경: {p['persona']}\n"
         f"- 직업: {p['professional_persona']}\n"
         f"- 취미: {p['hobbies_and_interests']}"
@@ -111,10 +135,14 @@ def persona_to_card(p, idx: int = 0) -> str:
 
 
 def print_card(p) -> None:
-    print(f"━━━ {p['sex']} · {p['age']}세 · {p['province']} {p['district']} ━━━")
+    loc = _location(p)
+    print(f"━━━ {p['sex']} · {p['age']}세 · {loc} ━━━")
     print(f"  직업  : {p['occupation']}")
     print(f"  학력  : {p['education_level']}")
-    print(f"  가구  : {p['family_type']} · {p['housing_type']}")
+    if 'family_type' in p.index:
+        print(f"  가구  : {p['family_type']} · {p.get('housing_type', '')}")
+    elif 'marital_status' in p.index:
+        print(f"  혼인  : {p['marital_status']}")
     print(f"\n  [요약]\n  {p['persona']}")
     print(f"\n  [취미]\n  {p['hobbies_and_interests']}")
     print()

@@ -42,12 +42,28 @@ description: >
 ## 시작 전 의존성 확인
 
 ```python
-import importlib, sys
-missing = [m for m in ['datasets', 'pandas'] if not importlib.util.find_spec(m)]
-print('OK' if not missing else f'pip install {" ".join(missing)}')
+import importlib.util, sys, os
+
+# 1. Python 패키지 확인
+missing = [m for m in ['datasets', 'pandas', 'pyarrow'] if not importlib.util.find_spec(m)]
+if missing:
+    print(f'pip install {" ".join(missing)}')
+else:
+    print('패키지 OK')
+
+# 2. src/personas.py 접근 가능 여부 확인
+_src = os.path.join(os.path.abspath('.'), 'src', 'personas.py')
+if not os.path.exists(_src):
+    print('⚠ 오류: src/personas.py를 찾을 수 없습니다.')
+    print('이 스킬은 market-simulation 레포 루트에서 실행해야 합니다:')
+    print('  git clone https://github.com/lumatic2/market-simulation ~/projects/market-simulation')
+    print('  cd ~/projects/market-simulation && claude')
+else:
+    print('경로 OK')
 ```
 
-설치 안 됐으면 사용자에게 `pip install datasets pandas` 안내 후 중단.
+패키지 누락이면 `pip install datasets pandas pyarrow` 안내 후 중단.  
+`src/personas.py` 없음 오류가 나면 레포 루트로 이동 안내 후 중단.
 
 ---
 
@@ -65,7 +81,12 @@ print('OK' if not missing else f'pip install {" ".join(missing)}')
 ```python
 import sys, os
 sys.stdout.reconfigure(encoding='utf-8')  # Windows 터미널 한글 깨짐 방지
-sys.path.insert(0, os.path.abspath('.'))
+
+_repo = os.path.abspath('.')
+if not os.path.exists(os.path.join(_repo, 'src', 'personas.py')):
+    print('오류: market-simulation 레포 루트에서 실행하세요 (cd ~/projects/market-simulation)')
+    sys.exit(1)
+sys.path.insert(0, _repo)
 from src.personas import load_pool, filter_pool, occupation_kw, persona_to_card
 
 df = load_pool('korea', sample_n=50000)
@@ -183,7 +204,12 @@ print(f'report: {report_path}')
 ```python
 import sys, os
 sys.stdout.reconfigure(encoding='utf-8')
-sys.path.insert(0, os.path.abspath('.'))
+
+_repo = os.path.abspath('.')
+if not os.path.exists(os.path.join(_repo, 'src', 'personas.py')):
+    print('오류: market-simulation 레포 루트에서 실행하세요 (cd ~/projects/market-simulation)')
+    sys.exit(1)
+sys.path.insert(0, _repo)
 from src.personas import load_pool, filter_pool, print_card
 
 df = load_pool('korea', sample_n=10000)

@@ -37,19 +37,36 @@ First run downloads and caches the Nemotron dataset (~few GB). Subsequent runs l
 
 ### As a Claude Code skill
 
-1. Copy `SKILL.md` to your Claude Code skills directory:
+1. Clone this repo to a fixed location and install dependencies:
+
+```bash
+git clone https://github.com/lumatic2/market-simulation ~/projects/market-simulation
+cd ~/projects/market-simulation
+pip install datasets pandas pyarrow
+```
+
+2. Copy `SKILL.md` to your Claude Code skills directory:
 
 ```bash
 cp SKILL.md ~/.claude/skills/market-simulation.md
 ```
 
-2. In any Claude Code session, trigger with natural language:
+3. **Start Claude Code from the repo root** — the skill runs Python code relative to the working directory:
+
+```bash
+cd ~/projects/market-simulation
+claude
+```
+
+4. Trigger with natural language:
 
 ```
 서울 30대 직장인들이 월 9,900원 커피 구독 서비스에 어떻게 반응할지 시뮬해줘
 ```
 
 Claude will ask for your target segment and question, then run the simulation.
+
+> **Note**: The simulation outputs (CSV + report) are saved to `output/` in the repo root.
 
 ### Programmatically
 

@@ -64,6 +64,7 @@ print('OK' if not missing else f'pip install {" ".join(missing)}')
 
 ```python
 import sys, os
+sys.stdout.reconfigure(encoding='utf-8')  # Windows 터미널 한글 깨짐 방지
 sys.path.insert(0, os.path.abspath('.'))
 from src.personas import load_pool, filter_pool, occupation_kw, persona_to_card
 
@@ -181,6 +182,7 @@ print(f'report: {report_path}')
 
 ```python
 import sys, os
+sys.stdout.reconfigure(encoding='utf-8')
 sys.path.insert(0, os.path.abspath('.'))
 from src.personas import load_pool, filter_pool, print_card
 

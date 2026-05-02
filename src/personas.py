@@ -46,13 +46,12 @@ def occupation_kw(intent: str) -> list[str]:
 
 
 def load_pool(country: str = 'korea', sample_n: int = 50000, seed: int = 42) -> pd.DataFrame:
-    """HuggingFace에서 균등 랜덤 샘플 로드.
+    """HuggingFace 스트리밍으로 sample_n 행 로드.
 
-    첫 실행: 전체 데이터셋 다운로드 후 캐시 (수 분 소요, ~수 GB).
-    이후 실행: 캐시에서 즉시 로드.
-
-    streaming=True의 buffer shuffle은 sliding-window라 편향이 남으므로
-    비스트리밍 + .shuffle()로 인덱스 수준 균등 샘플링을 사용한다.
+    buffer_size=100_000 셔플: 앞쪽 ~150k 행에서 균등 추출.
+    1M 전체 균등 샘플은 아니지만, Nemotron 데이터 자체가 인구통계 비례
+    생성이므로 탐색 시뮬에 충분한 대표성을 가진다.
+    전체 다운로드(비스트리밍) 대비 시작 시간이 수십 배 빠르다.
     """
     try:
         from datasets import load_dataset
@@ -63,9 +62,14 @@ def load_pool(country: str = 'korea', sample_n: int = 50000, seed: int = 42) -> 
     if not ds_id:
         raise ValueError(f'country는 {list(DATASET_IDS)} 중 하나여야 합니다.')
 
-    ds = load_dataset(ds_id, split='train')  # 캐시 후 재사용
-    ds = ds.shuffle(seed=seed)
-    return ds.select(range(min(sample_n, len(ds)))).to_pandas()
+    ds = load_dataset(ds_id, split='train', streaming=True)
+    ds = ds.shuffle(seed=seed, buffer_size=100_000)
+    rows = []
+    for i, row in enumerate(ds):
+        if i >= sample_n:
+            break
+        rows.append(row)
+    return pd.DataFrame(rows).reset_index(drop=True)
 
 
 def filter_pool(

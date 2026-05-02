@@ -35,28 +35,14 @@ First run streams ~50k persona rows from HuggingFace — no full dataset downloa
 
 ### As a Claude Code skill
 
-1. Install the package:
+1. Install the package and skill (works on macOS, Linux, Windows):
 
 ```bash
 pip install market-simulation
+market-simulation install-skill
 ```
 
-2. Install the skill into Claude Code:
-
-**macOS / Linux:**
-```bash
-mkdir -p ~/.claude/skills && curl -o ~/.claude/skills/market-simulation.md \
-  https://raw.githubusercontent.com/lumatic2/market-simulation/master/SKILL.md
-```
-
-**Windows (PowerShell):**
-```powershell
-New-Item -ItemType Directory -Force "$HOME\.claude\skills" | Out-Null
-irm "https://raw.githubusercontent.com/lumatic2/market-simulation/master/SKILL.md" |
-  Out-File "$HOME\.claude\skills\market-simulation.md" -Encoding utf8
-```
-
-Then **restart your Claude Code session** (or open a new one) so the skill is loaded.
+Then **restart your Claude Code session** so the skill is loaded.
 
 3. Trigger from any Claude Code session:
 

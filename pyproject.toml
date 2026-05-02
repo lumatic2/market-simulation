@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "market-simulation"
-version = "0.1.0"
+version = "0.2.0"
 description = "AI market research simulation using NVIDIA Nemotron personas and Claude Code Agents"
 readme = "README.md"
 license = "MIT"
@@ -27,6 +27,12 @@ dev = ["pytest", "ruff", "build", "twine"]
 Homepage = "https://github.com/lumatic2/market-simulation"
 Repository = "https://github.com/lumatic2/market-simulation"
 
+[project.scripts]
+market-simulation = "market_simulation._cli:main"
+
 [tool.setuptools.packages.find]
 where = ["."]
 include = ["market_simulation*"]
+
+[tool.setuptools.package-data]
+market_simulation = ["SKILL.md"]

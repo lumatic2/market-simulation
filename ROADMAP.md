@@ -1,4 +1,4 @@
-> 마지막 업데이트: 2026-05-03
+> 마지막 업데이트: 2026-05-03 (v0.7.0 배포 예정)
 
 # ROADMAP — market-simulation
 
@@ -27,16 +27,43 @@
 - [x] Japan 페르소나 연동 테스트 — prefecture/area/marital_status 컬럼 확인, 도쿄 필터·카드 생성 정상
 - [x] SKILL.md 이중 관리 해결 — setup.py build_py 훅으로 루트 → 패키지 자동 복사, market_simulation/SKILL.md gitignore 처리
 
-## 이어서 할 일
-
-새 세션에서 `~/projects/market-simulation/` 기준으로:
-1. SKILL.md 이중 관리 해결 — `Makefile` 또는 `setup.py` pre-build hook으로 루트 SKILL.md → market_simulation/SKILL.md 자동 동기화
-2. Japan 페르소나 실제 시뮬 — `load_pool('japan', sample_n=50000)` → 도쿄 30대 회사원 대상 시뮬 1회
-3. 지인 3~5명 소프트론치 — 설치 → 시뮬 → 결과 피드백 수집
-
 ## v0.3 — 공개 준비
 
 - [x] SKILL.md 단일 소스 관리 (setup.py build_py 훅)
 - [x] Japan 시뮬 검증
 - [x] 예제 스크립트 (`examples/coffee_shop.py`)
-- [ ] 소프트론치 피드백 반영
+- [ ] 소프트론치 피드백 반영 (보류 중)
+
+## v0.4 — 다국가 확장
+
+- [x] 7개국 페르소나 지원 (Korea, Japan, US, UK, Germany, France, Brazil)
+- [x] LLM disclaimer + 윤리 가이드 추가
+- [x] README 7-country + 6 use cases 이중언어 재작성
+- [x] sentiment labeling + crosstab + keyword 분석 (`analyze.py`)
+
+## v0.5 — 분석 고도화
+
+- [x] analyze.py 감성 라벨링·교차분석·키워드 분석 안정화
+- [x] PyPI v0.5.0 배포
+
+## v0.6 — 리포트 개선
+
+- [x] analyze.py HTML 리포트 생성 + 터미널 요약 출력
+- [x] SKILL.md 자동 버전 체크 + 분석 섹션 문서화
+- [x] PyPI v0.6.0 배포
+
+## v0.7 — 리포트 UX
+
+- [x] HTML 리포트 다크모드 (--bg:#0d1117, --surface:#161b22)
+- [x] "감성 분포" → "반응 분포" 명칭 변경
+- [x] "키워드 분석" → "언급 키워드" + 각 섹션에 chart-desc 설명 자막 추가
+- [x] 자동 인사이트 섹션 (나이·길이·편향 경고)
+- [x] 응답 깊이 섹션 추가 (감성별 평균 응답 길이)
+- [x] 터미널 요약 UTF-8/CP949 인코딩 문제 수정
+- [ ] PyPI v0.7.0 배포
+
+## 이어서 할 일
+
+1. PyPI v0.7.0 배포 (`pyproject.toml` 버전 업 → build → upload)
+2. 소프트론치 — 카톡 개발자 오픈채팅방 공유 (`pip install market-simulation`)
+3. 피드백 수집 후 v0.8 기획

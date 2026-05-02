@@ -1,4 +1,4 @@
-> 마지막 업데이트: 2026-05-03 (v0.7.0 배포 완료)
+> 마지막 업데이트: 2026-05-04
 
 # ROADMAP — market-simulation
 
@@ -62,8 +62,15 @@
 - [x] 터미널 요약 UTF-8/CP949 인코딩 문제 수정
 - [x] PyPI v0.7.0 배포
 
-## 이어서 할 일
+## v0.8 — 3-모드 시스템
 
-1. PyPI v0.7.0 배포 (`pyproject.toml` 버전 업 → build → upload)
-2. 소프트론치 — 카톡 개발자 오픈채팅방 공유 (`pip install market-simulation`)
-3. 피드백 수집 후 v0.8 기획
+- [x] 감성 분류 LLM 임베딩 — 에이전트 출력 헤더에 `[긍정|중립|부정]` 태그 직접 삽입
+- [x] SKILL.md 0단계 모드 자동 감지 (A/B/C)
+- [x] SKILL.md 모드별 에이전트 출력 형식 분리 (A/B/C 블록)
+- [x] SKILL.md 4단계 CSV 구조 3-모드 명시 (sentiment/themes 컬럼)
+- [x] analyze.py `_detect_mode()` — CSV 컬럼으로 A/B/C 자동 감지
+- [x] analyze.py B모드 지원 — 테마 바 차트, 테마 필터 버튼, 테마 배지
+- [x] analyze.py C모드 지원 — 감성 섹션 + 테마 차트 병행
+- [x] analyze.py `add_sentiment()` B모드 스킵 (rule-based 불필요)
+- [ ] PyPI v0.8.0 배포
+- [ ] USA 시장 테스트 — 영어 응답 B/C 모드 end-to-end 검증

@@ -19,23 +19,48 @@ import pandas as pd
 
 SHORT_THRESHOLD = 20
 
-# 규칙 기반 감성 분류 키워드 (한국어 + 영어)
-_POS_KW = [
-    # 한국어
-    '신청', '구독', '괜찮', '합리적', '저렴', '가성비', '긍정', '해볼', '고려',
-    '좋아', '만족', '추천', '기대', '이득', '편리', '간편', '좋겠', '살게', '써볼',
-    # 영어
-    'yes', 'would', 'definitely', 'great', 'affordable', 'worth', 'subscribe',
-    'interested', 'convenient', 'value',
-]
-_NEG_KW = [
-    # 한국어
-    '안 하', '안하', '하지 않', '필요 없', '필요없', '낭비', '비싸', '거절',
-    '패스', '모르겠', '망설', '불필요', '부담', '꺼려', '싫', '안 쓸', '안쓸',
-    # 영어
-    'no ', "wouldn't", "won't", 'not interested', 'expensive', 'waste',
-    'unnecessary', "don't need", 'pass',
-]
+
+# ── 테마 분석 ─────────────────────────────────────────────────────────────────
+
+def _parse_themes(themes_val) -> list[str]:
+    """'편의성, 가격부담' → ['편의성', '가격부담']."""
+    if themes_val is None:
+        return []
+    if isinstance(themes_val, float):
+        import math
+        if math.isnan(themes_val):
+            return []
+    s = str(themes_val).strip()
+    if not s:
+        return []
+    return [t.strip() for t in s.split(',') if t.strip()]
+
+
+def _theme_counts(df: pd.DataFrame, top_n: int = 15) -> list[tuple[str, int]]:
+    """themes 컬럼에서 테마별 빈도 집계."""
+    counter: Counter = Counter()
+    if 'themes' not in df.columns:
+        return []
+    for ts in df['themes'].fillna(''):
+        for t in _parse_themes(ts):
+            counter[t] += 1
+    return counter.most_common(top_n)
+
+
+def _detect_mode(df: pd.DataFrame) -> str:
+    """CSV 컬럼에서 시뮬 모드 자동 감지: 'A' | 'B' | 'C'."""
+    has_sent   = ('sentiment' in df.columns
+                  and df['sentiment'].notna().any()
+                  and (df['sentiment'] != '').any())
+    has_themes = ('themes' in df.columns
+                  and df['themes'].notna().any()
+                  and (df['themes'].astype(str).str.strip() != '').any())
+    if has_sent and has_themes:
+        return 'C'
+    if has_themes:
+        return 'B'
+    return 'A'
+
 
 # 한국어 불용어 (2글자 이상 추출 후 제거)
 _KO_STOPWORDS = {
@@ -46,24 +71,21 @@ _KO_STOPWORDS = {
 }
 
 
-# ── 감성 분류 ─────────────────────────────────────────────────────────────────
-
-def label_sentiment(text: str) -> str:
-    """긍정 / 부정 / 중립 3-way 규칙 기반 분류."""
-    t = text.lower()
-    pos = sum(1 for kw in _POS_KW if kw in t)
-    neg = sum(1 for kw in _NEG_KW if kw in t)
-    if pos > neg:
-        return '긍정'
-    if neg > pos:
-        return '부정'
-    return '중립'
-
+# ── 감성 정규화 ───────────────────────────────────────────────────────────────
 
 def add_sentiment(df: pd.DataFrame) -> pd.DataFrame:
-    """df에 'sentiment' 컬럼을 추가해 반환 (원본 불변)."""
+    """sentiment 컬럼 정규화 (원본 불변).
+
+    에이전트가 출력한 LLM 태그(긍정/중립/부정)를 기준으로 사용.
+    유효하지 않은 값(태그 누락·파싱 실패)은 '중립'으로 채움.
+    sentiment 컬럼이 없으면 df를 그대로 반환 (B모드).
+    """
     out = df.copy()
-    out['sentiment'] = out['answer'].fillna('').apply(label_sentiment)
+    valid = {'긍정', '중립', '부정'}
+    if 'sentiment' in out.columns:
+        mask = ~out['sentiment'].isin(valid)
+        if mask.any():
+            out.loc[mask, 'sentiment'] = '중립'
     return out
 
 
@@ -285,6 +307,7 @@ def write_report(csv_path: str, topic: str = '', question: str = '') -> str:
         return _write_error(csv_path, topic, f'필수 컬럼 누락: {missing}')
 
     df['answer'] = df['answer'].fillna('')
+    mode = _detect_mode(df)
     df = add_sentiment(df)
 
     # 기본 통계
@@ -314,13 +337,23 @@ def write_report(csv_path: str, topic: str = '', question: str = '') -> str:
         vals = df[geo_col].value_counts().head(5).to_dict()
         demo_lines.append(f"| 지역 | " + ', '.join(f"{_md_safe(str(k))}({v})" for k, v in vals.items()) + ' |')
 
-    # 감성 분포
-    sent_counts = df['sentiment'].value_counts()
-    sent_lines = ['| 감성 | N | 비율 |', '|---|---|---|']
-    for s in ['긍정', '부정', '중립']:
-        c = sent_counts.get(s, 0)
-        sent_lines.append(f"| {s} | {c} | {c/n:.0%} |")
-    sentiment_dist = '\n'.join(sent_lines)
+    # 감성/테마 분포
+    if 'sentiment' in df.columns:
+        sent_counts = df['sentiment'].value_counts()
+        sent_lines = ['| 감성 | N | 비율 |', '|---|---|---|']
+        for s in ['긍정', '부정', '중립']:
+            c = sent_counts.get(s, 0)
+            sent_lines.append(f"| {s} | {c} | {c/n:.0%} |")
+        sentiment_dist = '\n'.join(sent_lines)
+    else:
+        sent_counts = Counter()
+        tc = _theme_counts(df)
+        if tc:
+            tl = ['| 테마 | N |', '|---|---|']
+            tl += [f'| {t} | {c} |' for t, c in tc[:10]]
+            sentiment_dist = '\n'.join(tl)
+        else:
+            sentiment_dist = '_테마 데이터 없음._'
 
     # 응답 인용
     quote_blocks = []
@@ -328,7 +361,9 @@ def write_report(csv_path: str, topic: str = '', question: str = '') -> str:
     for _, r in ok_df.iterrows():
         loc2 = f"-{_md_safe(str(r[loc_col2]))}" if loc_col2 else ''
         geo_str = f"{_md_safe(str(r[geo_col]))}{loc2}" if geo_col else ''
-        header = f"### [{r['age']}세 {_md_safe(str(r['sex']))} · {_md_safe(str(r['occupation']))} · {geo_str}] [{r['sentiment']}]"
+        sent_label = str(r.get('sentiment', '')) if 'sentiment' in ok_df.columns else ''
+        sent_tag = f' [{sent_label}]' if sent_label else ''
+        header = f"### [{r['age']}세 {_md_safe(str(r['sex']))} · {_md_safe(str(r['occupation']))} · {geo_str}]{sent_tag}"
         quote_blocks.append(f"{header}\n> {_md_safe(str(r['answer']))}\n")
     quotes = '\n'.join(quote_blocks) or '_정상 응답 없음._'
 
@@ -348,12 +383,16 @@ def write_report(csv_path: str, topic: str = '', question: str = '') -> str:
     else:
         diag_lines.append("- 안정적. 현재 설정 그대로 다음 시뮬에 사용 가능.")
     pos_rate = sent_counts.get('긍정', 0) / n if n else 0
-    if pos_rate > 0.7:
+    if pos_rate > 0.7 and 'sentiment' in df.columns:
         diag_lines.append(f"- ⚠ 긍정 비율 {pos_rate:.0%} — LLM positive bias 가능성. 절대값보다 세그먼트 간 상대 비교 활용 권장.")
 
     # 키워드
-    pos_texts = ok_df[ok_df['sentiment'] == '긍정']['answer'].tolist()
-    neg_texts = ok_df[ok_df['sentiment'] == '부정']['answer'].tolist()
+    if 'sentiment' in df.columns:
+        pos_texts = ok_df[ok_df['sentiment'] == '긍정']['answer'].tolist()
+        neg_texts = ok_df[ok_df['sentiment'] == '부정']['answer'].tolist()
+    else:
+        pos_texts = ok_df['answer'].tolist()
+        neg_texts = []
 
     body = _REPORT_TEMPLATE.format(
         title=topic.replace('_', ' ') or '시뮬 결과',
@@ -397,11 +436,32 @@ def print_summary(df: pd.DataFrame, topic: str, report_path: str) -> None:
     except Exception:
         pass
 
-    n = len(df)
+    mode  = _detect_mode(df)
+    n     = len(df)
+    title = (topic.replace('_', ' ') or '시뮬 결과')[:30]
+    w     = 52
+
+    if mode == 'B':
+        td       = _theme_counts(df, 3)
+        theme_str = '  '.join(f"{t}({c})" for t, c in td)
+        n_themes  = len(_theme_counts(df))
+        print('=' * w)
+        print(f"  {title}")
+        print('=' * w)
+        print(f"  응답    {n:2d}명  [발견 조사 모드]")
+        print(f"  테마    {n_themes}개")
+        if theme_str:
+            print(f"  상위    {theme_str}")
+        print('-' * w)
+        print(f"  리포트  {report_path}")
+        print('=' * w)
+        return
+
+    # A/C mode
     sent = df['sentiment'].value_counts() if 'sentiment' in df.columns else {}
-    pos = sent.get('긍정', 0)
-    neg = sent.get('부정', 0)
-    neu = sent.get('중립', 0)
+    pos  = sent.get('긍정', 0)
+    neg  = sent.get('부정', 0)
+    neu  = sent.get('중립', 0)
 
     bar_w = 20
 
@@ -409,8 +469,8 @@ def print_summary(df: pd.DataFrame, topic: str, report_path: str) -> None:
         filled = round(count / n * bar_w) if n else 0
         return '#' * filled + '-' * (bar_w - filled)
 
-    kws = top_keywords(df['answer'].dropna().tolist(), 3)
-    kw_str = '  '.join(f"{w}({c})" for w, c in kws)
+    kws    = top_keywords(df['answer'].dropna().tolist(), 3)
+    kw_str = '  '.join(f"{kw}({c})" for kw, c in kws)
 
     pos_df = df[df['sentiment'] == '긍정'] if 'sentiment' in df.columns else pd.DataFrame()
     neg_df = df[df['sentiment'] == '부정'] if 'sentiment' in df.columns else pd.DataFrame()
@@ -418,8 +478,6 @@ def print_summary(df: pd.DataFrame, topic: str, report_path: str) -> None:
     if len(pos_df) and len(neg_df):
         age_insight = f"  긍정 평균나이 {pos_df['age'].mean():.1f}세  부정 {neg_df['age'].mean():.1f}세"
 
-    title = (topic.replace('_', ' ') or '시뮬 결과')[:30]
-    w = 52
     print('=' * w)
     print(f"  {title}")
     print('=' * w)
@@ -546,13 +604,13 @@ def _auto_insights(df: pd.DataFrame) -> list[str]:
             insights.append(
                 f"긍정 응답에서 두드러진 단어: "
                 + ', '.join(f'<b>{w}</b>' for w in pos_diff)
-                + " — 호감·수용 이유를 암시합니다."
+                + " — 긍정 이유를 암시합니다."
             )
         if neg_diff:
             insights.append(
                 f"부정 응답에서 두드러진 단어: "
                 + ', '.join(f'<b>{w}</b>' for w in neg_diff)
-                + " — 거부·저항 요인을 암시합니다."
+                + " — 부정 요인을 암시합니다."
             )
 
     # 조건부 긍정 비율 — "~다면", "~는데", "~지만" 등 명확한 조건·유보 표현
@@ -613,14 +671,14 @@ def _select_notable_quotes(df: pd.DataFrame, geo_col, loc2_col) -> list[dict]:
     pos_df = df[df['sentiment'] == '긍정'] if 'sentiment' in df.columns else pd.DataFrame()
     if len(pos_df) > 0:
         idx = pos_df['answer'].str.len().idxmax()
-        results.append(_row_to_quote(df.loc[idx], '수용 대표 응답', '#3fb950'))
+        results.append(_row_to_quote(df.loc[idx], '긍정 대표 응답', '#3fb950'))
         used.add(idx)
 
     # 2. 저항 대표 — 부정 중 가장 긴 응답
     neg_df = df[(df['sentiment'] == '부정') & (~df.index.isin(used))] if 'sentiment' in df.columns else pd.DataFrame()
     if len(neg_df) > 0:
         idx = neg_df['answer'].str.len().idxmax()
-        results.append(_row_to_quote(df.loc[idx], '저항 대표 응답', '#f85149'))
+        results.append(_row_to_quote(df.loc[idx], '부정 대표 응답', '#f85149'))
         used.add(idx)
 
     # 3. 복합 반응 — 조건부 표현이 가장 많은 응답 (중립/긍정 우선)
@@ -663,11 +721,11 @@ def _headline(df: pd.DataFrame, n_pos: int, n_neg: int, n_neu: int, n: int) -> s
     # 기본 요약
     pos_pct = n_pos / n if n else 0
     if pos_pct >= 0.60:
-        return f"전반적 긍정 반응 ({pos_pct:.0%}) — 과반이 수용 의향"
+        return f"전반적 긍정 반응 ({pos_pct:.0%}) — 과반이 긍정 반응"
     elif n_neg / n >= 0.40 if n else False:
-        return f"저항 비율 높음 ({n_neg/n:.0%}) — 도입 장벽 점검 필요"
+        return f"부정 비율 높음 ({n_neg/n:.0%}) — 도입 장벽 점검 필요"
     else:
-        return f"{dom_label} 우세 ({dom_pct:.0%}) — 응답 {n}명 중 절반 이상 유보적"
+        return f"{dom_label} 우세 ({dom_pct:.0%}) — 응답 {n}명 중 절반 이상 중립"
 
 
 def write_html_report(
@@ -685,96 +743,143 @@ def write_html_report(
     n        = len(df)
     geo_col  = next((c for c in ['province','state','prefecture','departement','planning_area'] if c in df.columns), None)
     loc2_col = next((c for c in ['district','city','area','commune','municipality'] if c in df.columns), None)
+    mode     = _detect_mode(df)
+    theme_data = _theme_counts(df) if mode in ('B', 'C') else []
 
     # ── 기본 통계 ────────────────────────────────────────────────────────────
-    sent  = df['sentiment'].value_counts() if 'sentiment' in df.columns else {}
-    n_pos = int(sent.get('긍정', 0))
-    n_neg = int(sent.get('부정', 0))
-    n_neu = int(sent.get('중립', 0))
+    if 'sentiment' in df.columns:
+        sent  = df['sentiment'].value_counts()
+        n_pos = int(sent.get('긍정', 0))
+        n_neg = int(sent.get('부정', 0))
+        n_neu = int(sent.get('중립', 0))
+    else:
+        n_pos = n_neg = n_neu = 0
     pie_data = json.dumps([n_pos, n_neg, n_neu])
 
     # ── 핵심 발견 ─────────────────────────────────────────────────────────────
-    insights     = _auto_insights(df)
-    insight_html = ''.join(f'<li>{i}</li>' for i in insights) if insights else '<li>인사이트를 추출할 데이터가 부족합니다.</li>'
-    headline     = _headline(df, n_pos, n_neg, n_neu, n)
+    if mode == 'B':
+        top3         = ', '.join(t for t, _ in theme_data[:3]) if theme_data else '—'
+        headline     = f"주요 테마 {len(theme_data)}개 발견 — 상위: {top3}"
+        insight_html = ''.join(
+            f'<li><b>{_he(t)}</b> — {c}건</li>' for t, c in theme_data[:8]
+        ) or '<li>테마 데이터 없음.</li>'
+    else:
+        insights     = _auto_insights(df)
+        insight_html = ''.join(f'<li>{i}</li>' for i in insights) if insights else '<li>인사이트를 추출할 데이터가 부족합니다.</li>'
+        headline     = _headline(df, n_pos, n_neg, n_neu, n)
 
-    # ── 세그먼트 차트 (조건부) ────────────────────────────────────────────────
+    # ── 세그먼트 차트 (A/C 모드만) ────────────────────────────────────────────
     seg_html_parts: list[str] = []
     seg_js_parts:   list[str] = []
 
-    def _stacked_js(chart_id, labels, pos_c, neg_c, neu_c):
-        return (
-            f"new Chart(document.getElementById('{chart_id}'), {{"
-            f"type:'bar',"
-            f"data:{{labels:{json.dumps(labels)},datasets:["
-            f"{{label:'긍정',data:{json.dumps(pos_c)},backgroundColor:'#3fb950'}},"
-            f"{{label:'부정',data:{json.dumps(neg_c)},backgroundColor:'#f85149'}},"
-            f"{{label:'중립',data:{json.dumps(neu_c)},backgroundColor:'#6e7681'}}"
-            f"]}},"
-            f"options:{{scales:{{x:{{...DS.x,stacked:true}},y:{{...DS.y,stacked:true}}}},"
-            f"plugins:{{legend:{{labels:{{color:'#c9d1d9'}},position:'bottom'}}}},"
-            f"responsive:true,maintainAspectRatio:true}}}});"
-        )
+    if mode != 'B':
+        def _stacked_js(chart_id, labels, pos_c, neg_c, neu_c):
+            return (
+                f"new Chart(document.getElementById('{chart_id}'), {{"
+                f"type:'bar',"
+                f"data:{{labels:{json.dumps(labels)},datasets:["
+                f"{{label:'긍정',data:{json.dumps(pos_c)},backgroundColor:'#3fb950'}},"
+                f"{{label:'부정',data:{json.dumps(neg_c)},backgroundColor:'#f85149'}},"
+                f"{{label:'중립',data:{json.dumps(neu_c)},backgroundColor:'#6e7681'}}"
+                f"]}},"
+                f"options:{{scales:{{x:{{...DS.x,stacked:true}},y:{{...DS.y,stacked:true}}}},"
+                f"plugins:{{legend:{{labels:{{color:'#c9d1d9'}},position:'bottom'}}}},"
+                f"responsive:true,maintainAspectRatio:true}}}});"
+            )
 
-    def _add_seg(col, chart_id, title, desc, min_count=2, max_groups=8):
-        if col not in df.columns or 'sentiment' not in df.columns:
-            return
-        vals  = df[col].value_counts()
-        valid = vals[vals >= min_count].index.tolist()[:max_groups]
-        if len(valid) < 2:
-            return
-        pc = [int(((df[col]==v)&(df['sentiment']=='긍정')).sum()) for v in valid]
-        nc = [int(((df[col]==v)&(df['sentiment']=='부정')).sum()) for v in valid]
-        uc = [int(((df[col]==v)&(df['sentiment']=='중립')).sum()) for v in valid]
-        seg_html_parts.append(
-            f'<div class="chart-box"><div class="chart-title">{_he(title)}</div>'
-            f'<div class="chart-desc">{_he(desc)}</div>'
-            f'<canvas id="{chart_id}"></canvas></div>'
-        )
-        seg_js_parts.append(_stacked_js(chart_id, valid, pc, nc, uc))
+        def _add_seg(col, chart_id, seg_title, desc, min_count=2, max_groups=8):
+            if col not in df.columns or 'sentiment' not in df.columns:
+                return
+            vals  = df[col].value_counts()
+            valid = vals[vals >= min_count].index.tolist()[:max_groups]
+            if len(valid) < 2:
+                return
+            pc = [int(((df[col]==v)&(df['sentiment']=='긍정')).sum()) for v in valid]
+            nc = [int(((df[col]==v)&(df['sentiment']=='부정')).sum()) for v in valid]
+            uc = [int(((df[col]==v)&(df['sentiment']=='중립')).sum()) for v in valid]
+            seg_html_parts.append(
+                f'<div class="chart-box"><div class="chart-title">{_he(seg_title)}</div>'
+                f'<div class="chart-desc">{_he(desc)}</div>'
+                f'<canvas id="{chart_id}"></canvas></div>'
+            )
+            seg_js_parts.append(_stacked_js(chart_id, valid, pc, nc, uc))
 
-    # 나이대 (3개 이상)
-    df2 = df.copy()
-    df2['나이대'] = df2['age'].apply(_age_group)
-    age_groups = [g for g in ['10대','20대','30대','40대','50대','60대+'] if g in df2['나이대'].values]
-    if len(age_groups) >= 3:
-        ag_pos = [int(((df2['나이대']==g)&(df2['sentiment']=='긍정')).sum()) for g in age_groups]
-        ag_neg = [int(((df2['나이대']==g)&(df2['sentiment']=='부정')).sum()) for g in age_groups]
-        ag_neu = [int(((df2['나이대']==g)&(df2['sentiment']=='중립')).sum()) for g in age_groups]
-        seg_html_parts.append(
-            '<div class="chart-box"><div class="chart-title">나이대별 반응</div>'
-            '<div class="chart-desc">연령층별 수용·거부 분포</div>'
-            '<canvas id="ageChart"></canvas></div>'
-        )
-        seg_js_parts.append(_stacked_js('ageChart', age_groups, ag_pos, ag_neg, ag_neu))
+        df2 = df.copy()
+        df2['나이대'] = df2['age'].apply(_age_group)
+        age_groups = [g for g in ['10대','20대','30대','40대','50대','60대+'] if g in df2['나이대'].values]
+        if len(age_groups) >= 3:
+            ag_pos = [int(((df2['나이대']==g)&(df2['sentiment']=='긍정')).sum()) for g in age_groups]
+            ag_neg = [int(((df2['나이대']==g)&(df2['sentiment']=='부정')).sum()) for g in age_groups]
+            ag_neu = [int(((df2['나이대']==g)&(df2['sentiment']=='중립')).sum()) for g in age_groups]
+            seg_html_parts.append(
+                '<div class="chart-box"><div class="chart-title">나이대별 반응</div>'
+                '<div class="chart-desc">연령층별 긍정·부정 분포</div>'
+                '<canvas id="ageChart"></canvas></div>'
+            )
+            seg_js_parts.append(_stacked_js('ageChart', age_groups, ag_pos, ag_neg, ag_neu))
 
-    # 직업군 (2종+, 각 2명+)
-    _add_seg('occupation', 'occChart', '직업군별 반응', '직군 간 수용도 차이 비교')
-
-    # 성별 (양쪽 3명+)
-    if 'sex' in df.columns:
-        if (df['sex'].value_counts() >= 3).sum() >= 2:
+        _add_seg('occupation', 'occChart', '직업군별 반응', '직군 간 긍정·부정 비교')
+        if 'sex' in df.columns and (df['sex'].value_counts() >= 3).sum() >= 2:
             _add_seg('sex', 'sexChart', '성별 반응', '남/여 반응 분포 비교', min_count=3)
 
-    # 반응 분포 레이아웃: 세그먼트 있으면 도넛+그리드, 없으면 도넛 단독
-    if seg_html_parts:
+    # ── 반응/테마 분포 섹션 ──────────────────────────────────────────────────
+    theme_chart_js = ''
+    if mode == 'B':
+        t_labels = json.dumps([t for t, _ in theme_data])
+        t_counts = json.dumps([c for _, c in theme_data])
         dist_section = (
-            '<div class="dist-wrap">'
-            '<div class="chart-box donut-box">'
-            '<div class="chart-title">전체 반응 비율</div>'
-            '<div class="chart-desc">수용·거부·유보 비율</div>'
-            '<canvas id="pieChart"></canvas></div>'
-            f'<div class="seg-grid">{"".join(seg_html_parts)}</div>'
-            '</div>'
+            '<div class="chart-box" style="max-width:680px">'
+            '<div class="chart-title">테마 분포</div>'
+            '<div class="chart-desc">응답에서 언급된 테마 빈도</div>'
+            f'<canvas id="themeChart" style="max-height:{max(180, len(theme_data)*22)}px"></canvas></div>'
+        )
+        theme_chart_js = (
+            f"new Chart(document.getElementById('themeChart'),{{"
+            f"type:'bar',"
+            f"data:{{labels:{t_labels},datasets:[{{data:{t_counts},"
+            f"backgroundColor:'#58a6ff',borderRadius:4}}]}},"
+            f"options:{{indexAxis:'y',plugins:{{legend:{{display:false}}}},"
+            f"scales:{{x:{{...DS.x}},y:{{...DS.y}}}},"
+            f"responsive:true,maintainAspectRatio:false}}}});"
         )
     else:
-        dist_section = (
-            '<div style="max-width:320px">'
-            '<div class="chart-box">'
-            '<div class="chart-title">전체 반응 비율</div>'
-            '<div class="chart-desc">수용·거부·유보 비율</div>'
-            '<canvas id="pieChart"></canvas></div></div>'
-        )
+        if seg_html_parts:
+            dist_section = (
+                '<div class="dist-wrap">'
+                '<div class="chart-box donut-box">'
+                '<div class="chart-title">전체 반응 비율</div>'
+                '<div class="chart-desc">긍정·부정·중립 비율</div>'
+                '<canvas id="pieChart"></canvas></div>'
+                f'<div class="seg-grid">{"".join(seg_html_parts)}</div>'
+                '</div>'
+            )
+        else:
+            dist_section = (
+                '<div style="max-width:320px">'
+                '<div class="chart-box">'
+                '<div class="chart-title">전체 반응 비율</div>'
+                '<div class="chart-desc">긍정·부정·중립 비율</div>'
+                '<canvas id="pieChart"></canvas></div></div>'
+            )
+        # C모드: 감성 분포 뒤에 테마 차트 추가
+        if mode == 'C' and theme_data:
+            t_labels = json.dumps([t for t, _ in theme_data])
+            t_counts = json.dumps([c for _, c in theme_data])
+            dist_section += (
+                f'<div class="chart-box" style="max-width:680px;margin-top:14px">'
+                f'<div class="chart-title">테마 분포</div>'
+                f'<div class="chart-desc">수용·거부 이유로 언급된 테마 빈도</div>'
+                f'<canvas id="themeChart" style="max-height:{max(160, len(theme_data)*22)}px"></canvas></div>'
+            )
+            theme_chart_js = (
+                f"new Chart(document.getElementById('themeChart'),{{"
+                f"type:'bar',"
+                f"data:{{labels:{t_labels},datasets:[{{data:{t_counts},"
+                f"backgroundColor:'#58a6ff',borderRadius:4}}]}},"
+                f"options:{{indexAxis:'y',plugins:{{legend:{{display:false}}}},"
+                f"scales:{{x:{{...DS.x}},y:{{...DS.y}}}},"
+                f"responsive:true,maintainAspectRatio:false}}}});"
+            )
 
     # ── 주목할 응답 ────────────────────────────────────────────────────────────
     notable = _select_notable_quotes(df, geo_col, loc2_col)
@@ -792,20 +897,75 @@ def write_html_report(
     SENT_BORDER_BG = {'긍정': 'rgba(63,185,80,.12)', '부정': 'rgba(248,81,73,.12)', '중립': 'rgba(110,118,129,.1)'}
     cards_html = []
     for _, r in df.iterrows():
-        sl  = r.get('sentiment', '중립')
-        col = SENT_COLOR.get(sl, '#6e7681')
-        bg  = SENT_BORDER_BG.get(sl, 'rgba(110,118,129,.1)')
+        sl          = str(r.get('sentiment', '중립')) if 'sentiment' in df.columns else '중립'
+        themes_list = _parse_themes(r.get('themes', '')) if 'themes' in df.columns else []
+        themes_str  = ','.join(themes_list)
+
+        if mode == 'B':
+            col        = '#58a6ff'
+            bg         = 'rgba(88,166,255,.1)'
+            badge_text = ', '.join(themes_list) or '—'
+        else:
+            col        = SENT_COLOR.get(sl, '#6e7681')
+            bg         = SENT_BORDER_BG.get(sl, 'rgba(110,118,129,.1)')
+            badge_text = sl
+
         g1  = _he(str(r[geo_col])) if geo_col else ''
         g2  = f' {_he(str(r[loc2_col]))}' if loc2_col else ''
         ans = _he(str(r['answer'])) if r['answer'] else '<em style="color:#6e7681">응답 없음</em>'
         cards_html.append(
-            f'<div class="card" data-sentiment="{_he(sl)}" style="border-left:3px solid {col};background:{bg}">'
+            f'<div class="card" data-sentiment="{_he(sl)}" data-themes="{_he(themes_str)}"'
+            f' style="border-left:3px solid {col};background:{bg}">'
             f'<div class="card-header">'
             f'<span class="profile">{_he(str(r["age"]))}세 {_he(str(r["sex"]))} · {_he(str(r["occupation"]))} · {g1}{g2}</span>'
-            f'<span class="badge" style="background:{col}">{_he(sl)}</span>'
+            f'<span class="badge" style="background:{col}">{_he(badge_text)}</span>'
             f'</div><p class="answer">{ans}</p></div>'
         )
     cards_joined = '\n'.join(cards_html)
+
+    # ── 필터 바 & 핵심 지표 ───────────────────────────────────────────────────
+    if mode == 'B':
+        top_themes = [t for t, _ in theme_data[:8]]
+        filter_parts = ['<button class="filter-btn active" onclick="filterCards(\'all\')">전체</button>']
+        for t in top_themes:
+            filter_parts.append(
+                f'<button class="filter-btn" onclick="filterCards(\'{_he(t)}\')"'
+                f' style="color:var(--blue)">{_he(t)}</button>'
+            )
+        filter_bar_html = '\n    '.join(filter_parts)
+
+        top_t_label = theme_data[0][0] if theme_data else '—'
+        top_t_count = theme_data[0][1] if theme_data else 0
+        stats_html = (
+            f'<div class="stat-box"><div class="stat-num">{n}</div><div class="stat-lbl">응답 수</div></div>'
+            f'<div class="stat-box"><div class="stat-num" style="color:var(--blue)">{len(theme_data)}</div><div class="stat-lbl">발견 테마</div></div>'
+            f'<div class="stat-box"><div class="stat-num" style="color:var(--blue);font-size:1.1rem">{_he(top_t_label)}</div>'
+            f'<div class="stat-lbl">최다 테마 ({top_t_count}건)</div></div>'
+        )
+        dist_h2 = '테마 분포'
+    else:
+        filter_bar_html = (
+            f'<button class="filter-btn active" onclick="filterCards(\'all\')">전체</button>\n'
+            f'    <button class="filter-btn" onclick="filterCards(\'긍정\')" style="color:var(--green)">긍정 {n_pos}명</button>\n'
+            f'    <button class="filter-btn" onclick="filterCards(\'부정\')" style="color:var(--red)">부정 {n_neg}명</button>\n'
+            f'    <button class="filter-btn" onclick="filterCards(\'중립\')" style="color:var(--muted)">중립 {n_neu}명</button>'
+        )
+        stats_html = (
+            f'<div class="stat-box"><div class="stat-num">{n}</div><div class="stat-lbl">응답 수</div></div>'
+            f'<div class="stat-box"><div class="stat-num" style="color:var(--green)">{n_pos}</div><div class="stat-lbl">긍정 ({n_pos/n:.0%})</div></div>'
+            f'<div class="stat-box"><div class="stat-num" style="color:var(--red)">{n_neg}</div><div class="stat-lbl">부정 ({n_neg/n:.0%})</div></div>'
+            f'<div class="stat-box"><div class="stat-num" style="color:var(--muted)">{n_neu}</div><div class="stat-lbl">중립 ({n_neu/n:.0%})</div></div>'
+        )
+        dist_h2 = '반응 분포' if mode == 'A' else '반응 분포 &amp; 테마'
+
+    pie_chart_js = '' if mode == 'B' else (
+        f"new Chart(document.getElementById('pieChart'),{{"
+        f"type:'doughnut',"
+        f"data:{{labels:['긍정','부정','중립'],datasets:[{{data:{pie_data},"
+        f"backgroundColor:['#3fb950','#f85149','#6e7681'],borderWidth:2,borderColor:'#161b22'}}]}},"
+        f"options:{{plugins:{{legend:{{labels:{{color:'#c9d1d9'}},position:'bottom'}}}},"
+        f"responsive:true}}}});"
+    )
 
     # ── HTML ──────────────────────────────────────────────────────────────────
     html = f"""<!DOCTYPE html>
@@ -825,30 +985,25 @@ h2{{font-size:.82rem;font-weight:600;color:var(--muted);text-transform:uppercase
 .meta{{color:var(--muted);font-size:.82rem;margin:5px 0 18px;}}
 .disclaimer{{background:rgba(248,81,73,.1);border:1px solid rgba(248,81,73,.3);padding:9px 14px;border-radius:6px;font-size:.8rem;color:#ffa198;margin-bottom:16px;}}
 .question-box{{background:rgba(210,153,34,.08);border-left:3px solid var(--yellow);padding:11px 16px;border-radius:4px;font-style:italic;margin-bottom:24px;color:#e3b341;}}
-/* 핵심 발견 */
 .hero-box{{background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:18px 22px;margin-bottom:6px;}}
 .hero-headline{{font-size:1.05rem;font-weight:600;color:var(--text);margin-bottom:14px;line-height:1.5;}}
 .hero-box ul{{padding-left:18px;}}
 .hero-box li{{font-size:.875rem;margin-bottom:8px;color:#c9d1d9;line-height:1.55;}}
-/* 핵심 지표 */
 .stats-row{{display:flex;gap:10px;flex-wrap:wrap;margin-bottom:6px;}}
 .stat-box{{flex:1;min-width:110px;background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:14px 16px;text-align:center;}}
 .stat-num{{font-size:1.9rem;font-weight:700;}}
 .stat-lbl{{font-size:.75rem;color:var(--muted);margin-top:3px;}}
-/* 반응 분포 */
 .dist-wrap{{display:grid;grid-template-columns:260px 1fr;gap:14px;margin-bottom:6px;align-items:start;}}
 .seg-grid{{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:14px;}}
 .chart-box{{background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:16px;}}
 .chart-box canvas{{max-height:220px;}}
 .chart-title{{font-size:.8rem;font-weight:600;color:var(--muted);margin-bottom:6px;}}
 .chart-desc{{font-size:.72rem;color:#6e7681;margin-bottom:8px;}}
-/* 주목할 응답 */
 .quote-grid{{display:grid;grid-template-columns:repeat(auto-fit,minmax(270px,1fr));gap:14px;margin-bottom:6px;}}
 .quote-card{{background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:18px 20px;display:flex;flex-direction:column;}}
 .quote-label{{font-size:.7rem;font-weight:700;text-transform:uppercase;letter-spacing:.07em;margin-bottom:10px;}}
 .quote-text{{font-size:.93rem;line-height:1.75;color:#c9d1d9;font-style:italic;flex:1;}}
 .quote-profile{{font-size:.74rem;color:var(--muted);margin-top:12px;padding-top:10px;border-top:1px solid var(--border);}}
-/* 개별 응답 */
 .filter-bar{{display:flex;gap:8px;margin:18px 0 12px;flex-wrap:wrap;}}
 .filter-btn{{padding:5px 16px;border-radius:20px;border:1px solid var(--border);background:transparent;color:var(--muted);cursor:pointer;font-size:.82rem;transition:.15s;}}
 .filter-btn:hover{{border-color:var(--text);color:var(--text);}}
@@ -878,13 +1033,10 @@ footer{{text-align:center;font-size:.72rem;color:#6e7681;margin-top:40px;}}
 
   <h2>핵심 지표</h2>
   <div class="stats-row">
-    <div class="stat-box"><div class="stat-num">{n}</div><div class="stat-lbl">응답 수</div></div>
-    <div class="stat-box"><div class="stat-num" style="color:var(--green)">{n_pos}</div><div class="stat-lbl">긍정 ({n_pos/n:.0%})</div></div>
-    <div class="stat-box"><div class="stat-num" style="color:var(--red)">{n_neg}</div><div class="stat-lbl">부정 ({n_neg/n:.0%})</div></div>
-    <div class="stat-box"><div class="stat-num" style="color:var(--muted)">{n_neu}</div><div class="stat-lbl">중립 ({n_neu/n:.0%})</div></div>
+    {stats_html}
   </div>
 
-  <h2>반응 분포</h2>
+  <h2>{dist_h2}</h2>
   {dist_section}
 
   <h2>주목할 응답</h2>
@@ -892,10 +1044,7 @@ footer{{text-align:center;font-size:.72rem;color:#6e7681;margin-top:40px;}}
 
   <h2>개별 응답 ({n}건)</h2>
   <div class="filter-bar">
-    <button class="filter-btn active" onclick="filterCards('all')">전체</button>
-    <button class="filter-btn" onclick="filterCards('긍정')" style="color:var(--green)">긍정 {n_pos}명</button>
-    <button class="filter-btn" onclick="filterCards('부정')" style="color:var(--red)">부정 {n_neg}명</button>
-    <button class="filter-btn" onclick="filterCards('중립')" style="color:var(--muted)">중립 {n_neu}명</button>
+    {filter_bar_html}
   </div>
   <div id="cards">{cards_joined}</div>
 
@@ -907,14 +1056,15 @@ const DS={{
   x:{{grid:{{color:'rgba(255,255,255,0.06)'}},ticks:{{color:'#8b949e'}}}},
   y:{{grid:{{color:'rgba(255,255,255,0.06)'}},ticks:{{color:'#8b949e'}}}}
 }};
-new Chart(document.getElementById('pieChart'),{{
-  type:'doughnut',
-  data:{{labels:['긍정','부정','중립'],datasets:[{{data:{pie_data},backgroundColor:['#3fb950','#f85149','#6e7681'],borderWidth:2,borderColor:'#161b22'}}]}},
-  options:{{plugins:{{legend:{{labels:{{color:'#c9d1d9'}},position:'bottom'}}}},responsive:true}}
-}});
+{pie_chart_js}
+{theme_chart_js}
 {chr(10).join(seg_js_parts)}
 function filterCards(s){{
-  document.querySelectorAll('.card').forEach(c=>c.classList.toggle('hidden',s!=='all'&&c.dataset.sentiment!==s));
+  document.querySelectorAll('.card').forEach(c=>{{
+    if(s==='all'){{c.classList.remove('hidden');return;}}
+    const themes=c.dataset.themes?c.dataset.themes.split(','):[];
+    c.classList.toggle('hidden',c.dataset.sentiment!==s&&!themes.includes(s));
+  }});
   document.querySelectorAll('.filter-btn').forEach(b=>b.classList.toggle('active',b.textContent.startsWith(s==='all'?'전체':s)));
 }}
 </script>

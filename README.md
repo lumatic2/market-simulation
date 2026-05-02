@@ -23,6 +23,14 @@ Claude Code 세션을 **새로 시작**하면 스킬이 로드됩니다.
 
 ---
 
+## 리포트 예시
+
+![market-simulation HTML report](docs/report-screenshot.png)
+
+> 다크모드 HTML 리포트 — 반응 분포 차트, 세그먼트 교차분석, 인사이트 요약, 전체 응답 카드 자동 생성.
+
+---
+
 ## 사용 예시
 
 Claude Code에서 자연어로 요청하면 됩니다.
@@ -170,6 +178,14 @@ market-simulation install-skill
 ```
 
 Restart your Claude Code session, then ask in natural language.
+
+---
+
+## Report preview
+
+![market-simulation HTML report](docs/report-screenshot.png)
+
+> Dark-mode HTML report — sentiment distribution charts, demographic cross-tabs, auto-generated insights, and full response cards.
 
 ---
 

@@ -7,3 +7,4 @@ dist/
 build/
 .cache/
 market_simulation/SKILL.md
+.playwright-mcp/

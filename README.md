@@ -102,6 +102,8 @@ English occupation filters: `occupation_kw('tech')`, `occupation_kw('finance')`,
 
 - Results are **LLM-generated hypotheses** — not survey or interview data.
 - Use relative comparisons within a run. Absolute numbers (e.g. "65% positive") are inflated by LLM positive bias.
+- Persona data is **fully synthetic**. Any resemblance to real individuals is coincidental.
+- Enterprise-oriented personas (finance, healthcare, etc.) are not included in the dataset. Filters for those occupations may return thin pools.
 - Persona data: CC BY 4.0 (NVIDIA). Attribution required when publishing results.
 
 ---

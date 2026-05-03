@@ -70,6 +70,17 @@ _KO_STOPWORDS = {
     '생각', '느낌', '사람', '경우', '부분', '때문', '이유', '방법',
 }
 
+# 영어 불용어 (4글자 이상 추출 후 제거)
+_EN_STOPWORDS = {
+    'the', 'and', 'for', 'that', 'this', 'with', 'not', 'but', 'have',
+    'from', 'they', 'would', 'what', 'about', 'which', 'when', 'there',
+    'their', 'just', 'into', 'more', 'also', 'been', 'than', 'like',
+    'will', 'some', 'could', 'even', 'very', 'really', 'think', 'actually',
+    'know', 'sure', 'much', 'need', 'make', 'want', 'dont', 'doesnt',
+    'before', 'after', 'does', 'were', 'your', 'mine', 'ours', 'them',
+    'its', 'myself', 'something', 'anything', 'everything', 'nothing',
+}
+
 
 # ── 감성 정규화 ───────────────────────────────────────────────────────────────
 
@@ -92,9 +103,12 @@ def add_sentiment(df: pd.DataFrame) -> pd.DataFrame:
 # ── 키워드 추출 ───────────────────────────────────────────────────────────────
 
 def _tokenize(text: str) -> list[str]:
-    """2~6글자 한글 토큰 추출 + 불용어 제거."""
-    tokens = re.findall(r'[가-힣]{2,6}', text)
-    return [t for t in tokens if t not in _KO_STOPWORDS]
+    """한글 2~6글자 또는 영어 4글자 이상 토큰 추출 + 불용어 제거."""
+    ko_tokens = [t for t in re.findall(r'[가-힣]{2,6}', text) if t not in _KO_STOPWORDS]
+    if ko_tokens:
+        return ko_tokens
+    en_tokens = re.findall(r"[a-zA-Z]{4,}", text.lower())
+    return [t for t in en_tokens if t not in _EN_STOPWORDS]
 
 
 def top_keywords(texts: list[str], n: int = 15) -> list[tuple[str, int]]:

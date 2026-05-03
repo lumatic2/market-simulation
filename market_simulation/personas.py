@@ -129,6 +129,77 @@ def load_pool(country: str = 'korea', sample_n: int = 50000, seed: int = 42) -> 
     return pd.DataFrame(rows).sample(frac=1, random_state=seed).reset_index(drop=True)
 
 
+def stream_until_pool(
+    country: str = 'korea',
+    province: str | list[str] | None = None,
+    district: str | list[str] | None = None,
+    age_range: tuple[int, int] | None = None,
+    sex: str | None = None,
+    occupation_keywords: list[str] | None = None,
+    target_pool: int = 100,
+    max_rows: int = 300_000,
+    seed: int = 42,
+) -> pd.DataFrame:
+    """스트리밍 중 행 단위로 필터를 적용해 target_pool 크기만큼 수집.
+
+    province/age/sex는 스트리밍 도중 즉시 검사 → 불필요한 행 로드 최소화.
+    occupation_keywords는 regex 필요로 수집 후 post-filter로 처리.
+    조건이 좁을수록 max_rows까지 읽으며 최대한 모음.
+    """
+    try:
+        from datasets import load_dataset
+    except ImportError:
+        raise ImportError('pip install datasets 를 먼저 실행하세요.')
+
+    ds_id = DATASET_IDS.get(country)
+    if not ds_id:
+        raise ValueError(f'country는 {list(DATASET_IDS)} 중 하나여야 합니다.')
+
+    province_set = ({province} if isinstance(province, str) else set(province)) if province else None
+    district_set = ({district} if isinstance(district, str) else set(district)) if district else None
+    # occupation_keywords는 post-filter → 그만큼 더 모아야 함
+    stream_target = target_pool * (4 if occupation_keywords else 1)
+
+    print(f'[{country}] 스트리밍 필터 로드 중... (목표 풀: {target_pool}명)', flush=True)
+    ds = load_dataset(ds_id, split='train', streaming=True)
+    ds = ds.shuffle(seed=seed, buffer_size=100_000)
+
+    collected, total_read, l1_col, l2_col = [], 0, None, None
+
+    for row in ds:
+        total_read += 1
+
+        if l1_col is None:
+            for c1, c2 in _GEO_PRIORITY:
+                if c1 in row:
+                    l1_col, l2_col = c1, (c2 if c2 and c2 in row else None)
+                    break
+
+        if province_set and l1_col and row.get(l1_col) not in province_set:
+            continue
+        if district_set and l2_col and row.get(l2_col) not in district_set:
+            continue
+        if age_range is not None:
+            age = row.get('age', -1)
+            if not (age_range[0] <= age <= age_range[1]):
+                continue
+        if sex is not None and row.get('sex') != sex:
+            continue
+
+        collected.append(row)
+        if len(collected) >= stream_target or total_read >= max_rows:
+            break
+
+    print(f'  {total_read:,}행 읽음 → {len(collected)}명 수집', flush=True)
+    df = pd.DataFrame(collected).sample(frac=1, random_state=seed).reset_index(drop=True)
+
+    if occupation_keywords:
+        df = filter_pool(df, occupation_keywords=occupation_keywords)
+        print(f'  직업 필터 후: {len(df)}명', flush=True)
+
+    return df
+
+
 def filter_pool(
     df: pd.DataFrame,
     province: str | list[str] | None = None,

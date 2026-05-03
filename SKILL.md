@@ -155,29 +155,29 @@ except Exception:
 ### 2단계 — 페르소나 카드 생성 (Python)
 
 ```python
-import sys, os
+import sys, time
 sys.stdout.reconfigure(encoding='utf-8')  # Windows 터미널 한글 깨짐 방지
-from market_simulation.personas import load_pool, filter_pool, occupation_kw, persona_to_card
-
-# country: 'korea' | 'usa' | 'japan' | 'india' | 'france' | 'brazil' | 'singapore'
-df = load_pool('korea', sample_n=50000)
-
-pool = filter_pool(
-    df,
-    province='서울',                              # 국가별 level-1 지역 (없으면 제거)
-    age_range=(25, 45),                           # 없으면 제거
-    occupation_keywords=occupation_kw('직장인'),  # 없으면 제거 (영어권: occupation_kw('tech') 등)
-)
+from market_simulation.personas import stream_until_pool, occupation_kw, persona_to_card
 
 N = 20          # 사용자 요청 인원
 N = min(N, 30)  # 하드캡 강제 — 항상 유지
-BATCH_SIZE = 5
+BATCH_SIZE = 10
+seed = int(time.time()) % 100000   # 매 실행마다 다른 페르소나
+
+# stream_until_pool: 조건에 맞는 행만 스트리밍 중 수집 → 불필요한 로드 없음
+# country: 'korea' | 'usa' | 'japan' | 'india' | 'france' | 'brazil' | 'singapore'
+pool = stream_until_pool(
+    country='korea',
+    province='서울',                              # 국가별 level-1 지역 (없으면 제거)
+    age_range=(25, 45),                           # 없으면 제거
+    occupation_keywords=occupation_kw('직장인'),  # 없으면 제거 (영어권: occupation_kw('tech') 등)
+    target_pool=N * 5,                            # 최소 풀 크기
+    seed=seed,
+)
 
 if len(pool) < N * 3:
     print(f'WARNING: 필터 후 {len(pool)}명 — 조건 완화 권장')
 
-import time
-seed = int(time.time()) % 100000   # 매 실행마다 다른 20명
 sample = pool.sample(min(N, len(pool)), random_state=seed).reset_index(drop=True)
 n_batches = -(-len(sample) // BATCH_SIZE)
 print(f'시뮬 설계: {len(sample)}명 / {n_batches}배치 × {BATCH_SIZE}명')

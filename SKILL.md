@@ -131,10 +131,26 @@ except Exception:
 
 ### 1단계 — 조건 확인 (1회 되묻기)
 
-사용자에게 확인:
-- **타깃 조건**: 지역(시도), 나이대, 성별, 직업 유형 (없으면 무작위)
-- **질문**: 페르소나에게 던질 질문 1개
-- **인원**: 기본 20명, 요청 시 최대 30명
+스킬이 처음 실행될 때 아래 형식으로 **사용 가능한 조건을 먼저 안내**한 후, 확인이 필요한 항목만 물어본다.
+
+안내 메시지 예시 (국가·상황에 맞게 조정):
+```
+시뮬레이션을 시작합니다. 아래 조건을 조합할 수 있습니다:
+
+• 국가: korea / usa / japan / india / france / brazil / singapore
+• 지역: 시도 단위 (예: 서울, 부산 / CA, NY, TX)
+• 나이대: 예) 20대, 30~45세
+• 성별: 남 / 여
+• 직업: 예) IT직군, 자영업자, 학생 / tech, finance, healthcare
+• 인원: 기본 20명, 최대 30명
+
+조건을 생략하면 해당 항목은 무작위로 선택됩니다.
+---
+현재 요청 기준으로 아래와 같이 이해했습니다. 맞으면 바로 시작할게요:
+[파악한 조건 정리]
+```
+
+미파악 항목이 있을 때만 추가로 질문. 사용자가 이미 충분한 정보를 줬다면 안내 후 바로 2단계 진행.
 
 ### 2단계 — 페르소나 카드 생성 (Python)
 
@@ -160,7 +176,9 @@ BATCH_SIZE = 5
 if len(pool) < N * 3:
     print(f'WARNING: 필터 후 {len(pool)}명 — 조건 완화 권장')
 
-sample = pool.sample(min(N, len(pool)), random_state=42).reset_index(drop=True)
+import time
+seed = int(time.time()) % 100000   # 매 실행마다 다른 20명
+sample = pool.sample(min(N, len(pool)), random_state=seed).reset_index(drop=True)
 n_batches = -(-len(sample) // BATCH_SIZE)
 print(f'시뮬 설계: {len(sample)}명 / {n_batches}배치 × {BATCH_SIZE}명')
 

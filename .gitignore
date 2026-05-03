@@ -7,7 +7,6 @@ dist/
 build/
 .cache/
 tmp/
-market_simulation/SKILL.md
 .playwright-mcp/
 CLAUDE.md
 CLAUDE.local.md

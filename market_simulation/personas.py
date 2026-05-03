@@ -157,6 +157,12 @@ def stream_until_pool(
 
     province_set = ({province} if isinstance(province, str) else set(province)) if province else None
     district_set = ({district} if isinstance(district, str) else set(district)) if district else None
+
+    # Singapore 등 level-2 없는 국가에서 district 필터는 무시됨 — 미리 경고
+    _no_l2 = {'singapore'}
+    if district and country in _no_l2:
+        print(f'WARNING: {country}는 level-2 지역 컬럼이 없어 district 필터가 무시됩니다.', flush=True)
+
     # occupation_keywords는 post-filter → 그만큼 더 모아야 함
     stream_target = target_pool * (4 if occupation_keywords else 1)
 
@@ -168,6 +174,8 @@ def stream_until_pool(
 
     for row in ds:
         total_read += 1
+        if total_read % 10000 == 0:
+            print(f'  탐색 중... {total_read:,}행 / 수집: {len(collected)}명', flush=True)
 
         if l1_col is None:
             for c1, c2 in _GEO_PRIORITY:
@@ -188,6 +196,8 @@ def stream_until_pool(
 
         collected.append(row)
         if len(collected) >= stream_target or total_read >= max_rows:
+            if total_read >= max_rows:
+                print(f'  WARNING: max_rows({max_rows:,}) 도달 — 조건이 너무 좁거나 데이터가 희박합니다.', flush=True)
             break
 
     print(f'  {total_read:,}행 읽음 → {len(collected)}명 수집', flush=True)

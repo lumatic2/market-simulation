@@ -6,9 +6,18 @@ import sys
 def install_skill():
     src = pathlib.Path(__file__).parent / 'SKILL.md'
     dst = pathlib.Path.home() / '.claude' / 'skills' / 'market-simulation.md'
-    dst.parent.mkdir(parents=True, exist_ok=True)
-    shutil.copy(src, dst)
-    print(f'Skill installed → {dst}')
+    if not src.exists():
+        print(f'Error: skill file not found at {src}')
+        print('Try reinstalling: pip install --upgrade market-simulation')
+        sys.exit(1)
+    try:
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy(src, dst)
+    except PermissionError:
+        print(f'Permission denied: cannot write to {dst}')
+        print(f'Manual install: copy {src} to {dst}')
+        sys.exit(1)
+    print(f'Skill installed: {dst}')
     print('Restart your Claude Code session to activate.')
 
 

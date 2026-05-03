@@ -63,7 +63,7 @@ Restart your Claude Code session — the skill loads automatically.
 ```
 HuggingFace streaming       Claude Code skill
 (8M+ personas)   ──▶   filter target segment
-                 ──▶   split into batches of 5
+                 ──▶   split into batches of 10
                  ──▶   run parallel sub-agents (isolated context per batch)
                  ──▶   collect responses → CSV + HTML report
 ```
@@ -79,7 +79,7 @@ HuggingFace streaming       Claude Code skill
 | | Value |
 |---|---|
 | Default | 20 personas |
-| Maximum | **30** (6 agents × 5) |
+| Maximum | **30** (3 agents × 10) |
 
 ---
 

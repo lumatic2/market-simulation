@@ -5,13 +5,18 @@ import sys
 
 def install_skill():
     src = pathlib.Path(__file__).parent / 'SKILL.md'
-    dst = pathlib.Path.home() / '.claude' / 'skills' / 'market-simulation.md'
+    skill_dir = pathlib.Path.home() / '.claude' / 'skills' / 'market-simulation'
+    dst = skill_dir / 'SKILL.md'
     if not src.exists():
         print(f'Error: skill file not found at {src}')
         print('Try reinstalling: pip install --upgrade market-simulation')
         sys.exit(1)
     try:
-        dst.parent.mkdir(parents=True, exist_ok=True)
+        # Remove legacy flat-file install if present
+        legacy = skill_dir.parent / 'market-simulation.md'
+        if legacy.exists():
+            legacy.unlink()
+        skill_dir.mkdir(parents=True, exist_ok=True)
         shutil.copy(src, dst)
     except PermissionError:
         print(f'Permission denied: cannot write to {dst}')
